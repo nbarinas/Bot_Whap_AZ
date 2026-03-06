@@ -27,7 +27,7 @@ app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 @app.on_event("startup")
 def on_startup():
-    models.Base.metadata.create_all(bind=database.engine)
+    models.Base.metadata.create_all(bind=database.bot_engine)
 
 @app.get("/")
 def read_root():
@@ -38,8 +38,8 @@ def login_page():
     return FileResponse(os.path.join(FRONTEND_DIR, "login.html"))
 
 @app.post("/api/token")
-async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(database.get_db)):
-    user = db.query(models.User).filter(models.User.username == form_data.username).first()
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db_users: Session = Depends(database.get_users_db)):
+    user = db_users.query(models.User).filter(models.User.username == form_data.username).first()
     if not user or not auth.verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=401,
@@ -215,7 +215,7 @@ async def verify_whatsapp_webhook(request: Request):
 
 
 @app.post("/api/bot/webhook")
-async def receive_whatsapp_webhook(request: Request, db: Session = Depends(database.get_db)):
+async def receive_whatsapp_webhook(request: Request, db: Session = Depends(database.get_db), db_users: Session = Depends(database.get_users_db)):
     """
     Receives incoming WhatsApp messages from Meta natively.
     """
@@ -238,7 +238,7 @@ async def receive_whatsapp_webhook(request: Request, db: Session = Depends(datab
                                 print(f"Received WhatsApp MSG from {phone}: {text_msg}")
                                 
                                 # Process it using our core logic
-                                process_bot_message(phone, text_msg, db)
+                                process_bot_message(phone, text_msg, db, db_users)
                                 
             return {"status": "ok"}
         except Exception as e:
@@ -250,15 +250,15 @@ async def receive_whatsapp_webhook(request: Request, db: Session = Depends(datab
 
 
 @app.post("/api/bot/webhook-simulate")
-def simulate_whatsapp_webhook(req: WebhookSimulateRequest, db: Session = Depends(database.get_db)):
+def simulate_whatsapp_webhook(req: WebhookSimulateRequest, db: Session = Depends(database.get_db), db_users: Session = Depends(database.get_users_db)):
     """
     Legacy/Simulator endpoint used by the frontend.
     """
-    reply = process_bot_message(req.phone_number, req.message, db)
+    reply = process_bot_message(req.phone_number, req.message, db, db_users)
     return {"reply": reply}
 
 
-def process_bot_message(phone_raw: str, message_raw: str, db: Session) -> str:
+def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users: Session) -> str:
     """
     Core bot logic extracted from the simulator so both endpoints can share it.
     """
@@ -267,7 +267,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session) -> str:
     
     # 1. Authorize User for Quota Management
     sql = text("SELECT role FROM users WHERE phone_number = :p")
-    user_record = db.execute(sql, {"p": phone}).first()
+    user_record = db_users.execute(sql, {"p": phone}).first()
     
     is_authorized = bool(user_record) or phone == "0000"
     

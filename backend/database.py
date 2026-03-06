@@ -2,22 +2,38 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 import os
 
-# Connect to the existing az_marketing.db in the az folder
+# Connect to the existing az_marketing.db in the az folder for local dev
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# ../../az/az_marketing.db
-DB_PATH = os.path.abspath(os.path.join(BASE_DIR, '..', '..', 'az', 'az_marketing.db'))
+LOCAL_AZ_DB_PATH = os.path.abspath(os.path.join(BASE_DIR, '..', '..', 'az', 'az_marketing.db'))
 
-SQLALCHEMY_DATABASE_URL = f"sqlite:///{DB_PATH}"
-
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
+# 1. BOT DATABASE (Read/Write for Quotas and Sessions)
+# Defaults to a local sqlite file in the backend folder
+BOT_DB_URL = os.getenv("BOT_DATABASE_URL", f"sqlite:///{os.path.join(BASE_DIR, 'bot_data.db')}")
+bot_engine = create_engine(
+    BOT_DB_URL, 
+    connect_args={"check_same_thread": False} if "sqlite" in BOT_DB_URL else {}
 )
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=bot_engine)
 Base = declarative_base()
+
+# 2. USERS DATABASE (Strictly Read-Only from Click Panda SQL or local testing AZ)
+USERS_DB_URL = os.getenv("USERS_DATABASE_URL", f"sqlite:///{LOCAL_AZ_DB_PATH}")
+users_engine = create_engine(
+    USERS_DB_URL, 
+    connect_args={"check_same_thread": False} if "sqlite" in USERS_DB_URL else {}
+)
+UsersSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=users_engine)
+UsersBase = declarative_base()
 
 def get_db():
     db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+def get_users_db():
+    db = UsersSessionLocal()
     try:
         yield db
     finally:

@@ -32,7 +32,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(database.get_db)):
+async def get_current_user(token: str = Depends(oauth2_scheme), db_users: Session = Depends(database.get_users_db)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -46,12 +46,9 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
     except JWTError:
         raise credentials_exception
         
-    user = db.query(models.User).filter(models.User.username == username).first()
+    user = db_users.query(models.User).filter(models.User.username == username).first()
     if user is None:
         raise credentials_exception
         
-    # Update last_seen
-    user.last_seen = datetime.utcnow()
-    db.commit()
-    
+    # Read-only policy enforced: we will NOT update last_seen here to preserve Click Panda SQL from modifications
     return user
