@@ -249,12 +249,12 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session) -> str:
     is_authorized = bool(user_record) or phone == "0000"
     
     if not is_authorized:
-        # Public users (not staff and not the test number)
-        reply = "¡Hola! Soy Chat AZ 👋 ¿Te puedo ayudar con tu bono?"
+        # Strict Validation: Only registered agents can use the bot
+        reply = "🚫 Acceso denegado. Este número de teléfono no está autorizado como encuestador."
         
-        # Log this interaction as well
+        # Log this interaction
         log = models.BotQuotaUpdate(
-            study_code="PUBLICO",
+            study_code="UNAUTHORIZED",
             phone_number=phone,
             message_text=message_raw,
             parsed_updates=reply
@@ -267,6 +267,8 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session) -> str:
             
         return reply
     
+    from datetime import datetime, timedelta, timezone
+    
     # Force restart keywords
     if msg in ["hola", "salir", "cancelar", "reiniciar", "menu"]:
         session = db.query(models.BotSession).filter(models.BotSession.phone_number == phone).first()
@@ -275,6 +277,20 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session) -> str:
             db.commit()
     
     session = db.query(models.BotSession).filter(models.BotSession.phone_number == phone).first()
+    
+    timeout_message = ""
+    if session and session.updated_at:
+        now = datetime.now(timezone.utc)
+        session_time = session.updated_at
+        if session_time.tzinfo is None:
+            session_time = session_time.replace(tzinfo=timezone.utc)
+            
+        if now - session_time > timedelta(minutes=5):
+            db.delete(session)
+            db.commit()
+            session = None
+            timeout_message = "⌛ Tu sesión ha expirado por inactividad (5 min). Empecemos de nuevo.\n\n"
+
     if not session:
         session = models.BotSession(phone_number=phone, state="IDLE", context_data="{}")
         db.add(session)
@@ -297,7 +313,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session) -> str:
         # Ask for study
         studies = db.query(models.BotQuota.study_code).distinct().all()
         if not studies:
-            reply = "No hay estudios activos en este momento."
+            reply = timeout_message + "No hay estudios activos en este momento."
         else:
             study_list = [s[0] for s in studies]
             ctx["available_studies"] = study_list
@@ -305,7 +321,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session) -> str:
             session.state = "WAITING_STUDY"
             
             opts = "\n".join([f"{i+1}. {s}" for i, s in enumerate(study_list)])
-            reply = f"¡Hola! Selecciona el estudio en el que estás:\n{opts}"
+            reply = timeout_message + f"¡Hola! Selecciona el estudio en el que estás:\n{opts}"
             
     elif state == "WAITING_STUDY":
         available = ctx.get("available_studies", [])
