@@ -26,11 +26,12 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=bot_engine)
 Base = declarative_base()
 
 # 2. USERS DATABASE (Strictly Read-Only from Click Panda SQL or local testing AZ)
-USERS_DB_URL = os.getenv("USERS_DATABASE_URL", f"sqlite:///{LOCAL_AZ_DB_PATH}")
+# Flexibilidad: Aceptamos USERS_DATABASE_URL o simplemente DATABASE_URL (nombre por defecto en Render)
+USERS_DB_URL = os.getenv("USERS_DATABASE_URL") or os.getenv("DATABASE_URL") or f"sqlite:///{LOCAL_AZ_DB_PATH}"
 
-if USERS_DB_URL.startswith("postgres://"):
+if USERS_DB_URL and USERS_DB_URL.startswith("postgres://"):
     USERS_DB_URL = USERS_DB_URL.replace("postgres://", "postgresql://", 1)
-if USERS_DB_URL.startswith("mysql://"):
+if USERS_DB_URL and USERS_DB_URL.startswith("mysql://"):
     USERS_DB_URL = USERS_DB_URL.replace("mysql://", "mysql+pymysql://", 1)
 
 users_engine = create_engine(
