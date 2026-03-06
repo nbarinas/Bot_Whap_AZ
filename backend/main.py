@@ -5,8 +5,9 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
 import os
+from fastapi.security import OAuth2PasswordRequestForm
 
-from . import models, database
+from . import models, database, auth
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.join(os.path.dirname(BASE_DIR), "frontend")
@@ -32,6 +33,28 @@ def on_startup():
 def read_root():
     return FileResponse(os.path.join(FRONTEND_DIR, "quotas.html"))
 
+@app.get("/login")
+def login_page():
+    return FileResponse(os.path.join(FRONTEND_DIR, "login.html"))
+
+@app.post("/api/token")
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(database.get_db)):
+    user = db.query(models.User).filter(models.User.username == form_data.username).first()
+    if not user or not auth.verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    # Ensure role is superuser or coordinator
+    if user.role not in ["superuser", "coordinator"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to manage quotas",
+        )
+    access_token = auth.create_access_token(data={"sub": user.username})
+    return {"access_token": access_token, "token_type": "bearer", "role": user.role}
+
 class QuotaCreateUpdate(BaseModel):
     study_code: str
     category: str
@@ -39,7 +62,7 @@ class QuotaCreateUpdate(BaseModel):
     target_count: int
 
 @app.get("/api/quotas")
-def get_bot_quotas(study_code: Optional[str] = None, db: Session = Depends(database.get_db)):
+def get_bot_quotas(study_code: Optional[str] = None, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
     query = db.query(models.BotQuota)
     if study_code:
         query = query.filter(models.BotQuota.study_code == study_code)
@@ -59,7 +82,7 @@ def get_bot_quotas(study_code: Optional[str] = None, db: Session = Depends(datab
     return result
 
 @app.post("/api/quotas")
-def create_or_update_quota(quota_in: QuotaCreateUpdate, db: Session = Depends(database.get_db)):
+def create_or_update_quota(quota_in: QuotaCreateUpdate, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
     quota = db.query(models.BotQuota).filter(
         models.BotQuota.study_code == quota_in.study_code,
         models.BotQuota.category == quota_in.category,
@@ -85,7 +108,7 @@ def create_or_update_quota(quota_in: QuotaCreateUpdate, db: Session = Depends(da
         return {"msg": "Quota created", "id": new_quota.id}
 
 @app.post("/api/quotas/batch")
-def create_or_update_quotas_batch(quotas_in: list[QuotaCreateUpdate], db: Session = Depends(database.get_db)):
+def create_or_update_quotas_batch(quotas_in: list[QuotaCreateUpdate], db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
     results = []
     for quota_in in quotas_in:
         quota = db.query(models.BotQuota).filter(
@@ -114,7 +137,7 @@ def create_or_update_quotas_batch(quotas_in: list[QuotaCreateUpdate], db: Sessio
     return {"msg": "Batch quotes processed", "ids": results}
 
 @app.delete("/api/quotas/{quota_id}")
-def delete_quota(quota_id: int, db: Session = Depends(database.get_db)):
+def delete_quota(quota_id: int, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
     quota = db.query(models.BotQuota).filter(models.BotQuota.id == quota_id).first()
     if not quota:
         raise HTTPException(status_code=404, detail="Quota not found")
@@ -124,7 +147,7 @@ def delete_quota(quota_id: int, db: Session = Depends(database.get_db)):
     return {"msg": "Quota deleted"}
 
 @app.delete("/api/quotas/study/{study_code}")
-def delete_study(study_code: str, db: Session = Depends(database.get_db)):
+def delete_study(study_code: str, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
     quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
     if not quotas:
         raise HTTPException(status_code=404, detail="Study not found")

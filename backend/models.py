@@ -3,6 +3,16 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .database import Base
 
+class User(Base):
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), unique=True, index=True)
+    hashed_password = Column(String(200))
+    role = Column(String(50))
+    phone_number = Column(String(20))
+    last_seen = Column(DateTime)
+
 class BotQuota(Base):
     __tablename__ = "bot_quotas"
     

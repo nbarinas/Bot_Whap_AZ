@@ -1,5 +1,35 @@
-document.addEventListener("DOMContentLoaded", loadQuotas);
+document.addEventListener("DOMContentLoaded", () => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+        window.location.href = '/login';
+        return;
+    }
+    loadQuotas();
+});
 
+async function fetchWithAuth(url, options = {}) {
+    const token = localStorage.getItem('token');
+    const headers = {
+        ...options.headers,
+        'Authorization': `Bearer ${token}`
+    };
+
+    const response = await fetch(url, { ...options, headers });
+
+    if (response.status === 401 || response.status === 403) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('role');
+        window.location.href = '/login';
+        throw new Error('Unauthorized');
+    }
+    return response;
+}
+
+function logout() {
+    localStorage.removeItem('token');
+    localStorage.removeItem('role');
+    window.location.href = '/login';
+}
 const DEFAULT_CATEGORIES = {
     "Género": ["Hombre", "Mujer"],
     "Región": ["Norte", "Centro", "Sur"],
@@ -12,7 +42,7 @@ const cartesian = (...a) => a.reduce((acc, b) => acc.flatMap(d => b.map(e => [d,
 
 async function loadQuotas() {
     try {
-        const res = await fetch('/api/quotas');
+        const res = await fetchWithAuth('/api/quotas');
         if (!res.ok) return;
 
         const data = await res.json();
@@ -271,7 +301,7 @@ async function saveBatchQuotas() {
     if (payload.length === 0) return;
 
     try {
-        const res = await fetch('/api/quotas/batch', {
+        const res = await fetchWithAuth('/api/quotas/batch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -283,7 +313,7 @@ async function saveBatchQuotas() {
 async function deleteStudyGlobal(studyCode) {
     if (!confirm(`¿Estás completamente seguro de ELIMINAR todo el estudio ${studyCode}?`)) return;
     try {
-        const res = await fetch(`/api/quotas/study/${studyCode}`, { method: 'DELETE' });
+        const res = await fetchWithAuth(`/api/quotas/study/${studyCode}`, { method: 'DELETE' });
         if (res.ok) loadQuotas();
         else alert("Error al eliminar el estudio");
     } catch (e) {

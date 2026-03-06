@@ -411,7 +411,12 @@
         <div class="header">
             <h1 style="color:var(--text-main);"><i class="fas fa-table" style="color:var(--primary-color)"></i> Gestión
                 de Cuotas</h1>
-            <button class="btn-primary" onclick="openModal()">+ Configurar Estudio</button>
+            <div style="display:flex; gap:10px;">
+                <button class="btn-primary" onclick="openModal()">+ Configurar Estudio</button>
+                <button onclick="logout()"
+                    style="background:var(--danger); color:white; border:none; padding:1rem; border-radius:12px; cursor:pointer; font-weight:700;"><i
+                        class="fas fa-sign-out-alt"></i> Salir</button>
+            </div>
         </div>
 
         <div id="studiesContainer">
