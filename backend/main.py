@@ -167,9 +167,9 @@ import requests
 from sqlalchemy import text
 
 # WhatsApp Configuration Constants (Use environment variables in production)
-WHATSAPP_TOKEN = "EAAXs5LUMDHoBQ6fh0CDjwAgYPNQD5jDqzib5xgCAHPQ4XkTa0AMBAvNyCvLGZCnZCs5QAIGOQFLG4xDDUorTNsZA9ZAsk1wmUQyXQ6w0tdYrZCIDhQLarbrsjzt23OZAZAKAi2oFlmtxYDWlasB3jylqx1NlwUfsolJxFJaBPDdf1bvUvUKqzajoX0ZBKAgV80WUM26Qkh2caLRnTqZCyz4oziqZCuKN9g7RcfrTsppzSqI8Fl1UuzxfzZBd5067KbAeVnXAdtG3xxK6ZCYKuToc2gZDZD"
-WHATSAPP_PHONE_ID = "933487246524604"
-WHATSAPP_VERIFY_TOKEN = "azbot_secreto_2026"
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "EAAXs5LUMDHoBQ6fh0CDjwAgYPNQD5jDqzib5xgCAHPQ4XkTa0AMBAvNyCvLGZCnZCs5QAIGOQFLG4xDDUorTNsZA9ZAsk1wmUQyXQ6w0tdYrZCIDhQLarbrsjzt23OZAZAKAi2oFlmtxYDWlasB3jylqx1NlwUfsolJxFJaBPDdf1bvUvUKqzajoX0ZBKAgV80WUM26Qkh2caLRnTqZCyz4oziqZCuKN9g7RcfrTsppzSqI8Fl1UuzxfzZBd5067KbAeVnXAdtG3xxK6ZCYKuToc2gZDZD")
+WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID", "933487246524604")
+WHATSAPP_VERIFY_TOKEN = os.getenv("WHATS_VERIFY_TOKEN", "azbot_secreto_2026")
 
 def send_whatsapp_message(to_phone: str, message_text: str):
     url = f"https://graph.facebook.com/v22.0/{WHATSAPP_PHONE_ID}/messages"
