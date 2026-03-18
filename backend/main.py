@@ -355,7 +355,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
     is_active = bool(active_agent)
     
     user_type = "UNKNOWN"
-    if is_active or phone == "0000":
+    if (is_active and is_in_base) or phone == "0000":
         user_type = "AGENT"
     elif is_in_base:
         user_type = "INACTIVE_AGENT"
