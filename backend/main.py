@@ -361,7 +361,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         user_type = "INACTIVE_AGENT"
     else:
         # Check if in calls
-        calls_sql = text("SELECT id FROM calls WHERE phone = :p OR phone = :np")
+        calls_sql = text("SELECT id FROM calls WHERE phone_number = :p OR phone_number = :np")
         call_record = db_users.execute(calls_sql, {"p": phone, "np": normalized_phone}).first()
         if call_record:
             user_type = "RESPONDENT"
@@ -440,7 +440,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 reply = timeout_message + f"{greeting} Selecciona el estudio en el que estás:\n{opts}"
                 
         elif user_type == "RESPONDENT":
-            calls_sql = text("SELECT study_id FROM calls WHERE phone = :p OR phone = :np")
+            calls_sql = text("SELECT study_id FROM calls WHERE phone_number = :p OR phone_number = :np")
             call_records = db_users.execute(calls_sql, {"p": phone, "np": normalized_phone}).fetchall()
             
             study_ids = [r.study_id for r in call_records if r.study_id]
@@ -589,7 +589,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             if bond_phone.startswith("57") and len(bond_phone) == 12:
                 bond_phone = bond_phone[2:]
             
-            calls_sql = text("SELECT study_id FROM calls WHERE phone = :p")
+            calls_sql = text("SELECT study_id FROM calls WHERE phone_number = :p")
             call_records = db_users.execute(calls_sql, {"p": bond_phone}).fetchall()
             study_ids = [r.study_id for r in call_records if r.study_id]
             
@@ -629,7 +629,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 ref_phone = ref_phone[2:]
                 
             six_months_ago = datetime.now() - timedelta(days=180)
-            calls_sql = text("SELECT id FROM calls WHERE phone = :p AND call_date >= :d")
+            calls_sql = text("SELECT id FROM calls WHERE phone_number = :p AND created_at >= :d")
             recent_call = db_users.execute(calls_sql, {"p": ref_phone, "d": six_months_ago}).first()
             
             if recent_call:
