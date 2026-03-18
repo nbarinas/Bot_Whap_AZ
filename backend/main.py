@@ -354,15 +354,22 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
     ).first()
     is_active = bool(active_agent)
     
-    is_authorized = is_active or phone == "0000"
-    
-    if not is_authorized:
-        if is_in_base:
-            reply = "⚠️ Por el momento no estás activo para registrar cuotas."
+    user_type = "UNKNOWN"
+    if is_active or phone == "0000":
+        user_type = "AGENT"
+    elif is_in_base:
+        user_type = "INACTIVE_AGENT"
+    else:
+        # Check if in calls
+        calls_sql = text("SELECT id FROM calls WHERE phone = :p OR phone = :np")
+        call_record = db_users.execute(calls_sql, {"p": phone, "np": normalized_phone}).first()
+        if call_record:
+            user_type = "RESPONDENT"
         else:
-            reply = "🚫 Acceso denegado. Este número de teléfono no está registrado en la base de la empresa."
+            user_type = "UNKNOWN"
             
-        # Log this interaction
+    if user_type == "INACTIVE_AGENT":
+        reply = "⚠️ Por el momento no estás activo para registrar cuotas."
         log = models.BotQuotaUpdate(
             study_code="UNAUTHORIZED",
             phone_number=phone,
@@ -371,10 +378,8 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         )
         db.add(log)
         db.commit()
-        
         if phone != "0000":
             send_whatsapp_message(phone, reply)
-            
         return reply
     
     from datetime import datetime, timedelta, timezone
@@ -419,19 +424,60 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         return f"⚠️ {err_msg}\n\nOpciones disponibles:\n{options_text}", ctx
 
     if state == "IDLE":
-        # Ask for study
-        studies = db.query(models.BotQuota.study_code).filter(models.BotQuota.is_closed == 0).distinct().all()
-        if not studies:
-            reply = timeout_message + "No hay estudios activos en este momento."
-        else:
-            study_list = [s[0] for s in studies]
-            ctx["available_studies"] = study_list
-            ctx["invalid_attempts"] = 0
-            session.state = "WAITING_STUDY"
+        if user_type == "AGENT":
+            # Ask for study
+            studies = db.query(models.BotQuota.study_code).filter(models.BotQuota.is_closed == 0).distinct().all()
+            if not studies:
+                reply = timeout_message + "No hay estudios activos en este momento."
+            else:
+                study_list = [s[0] for s in studies]
+                ctx["available_studies"] = study_list
+                ctx["invalid_attempts"] = 0
+                session.state = "WAITING_STUDY"
+                
+                opts = "\n".join([f"{i+1}. {s}" for i, s in enumerate(study_list)])
+                greeting = f"¡Hola {agent_name}!" if agent_name else "¡Hola!"
+                reply = timeout_message + f"{greeting} Selecciona el estudio en el que estás:\n{opts}"
+                
+        elif user_type == "RESPONDENT":
+            calls_sql = text("SELECT study_id FROM calls WHERE phone = :p OR phone = :np")
+            call_records = db_users.execute(calls_sql, {"p": phone, "np": normalized_phone}).fetchall()
             
-            opts = "\n".join([f"{i+1}. {s}" for i, s in enumerate(study_list)])
-            greeting = f"¡Hola {agent_name}!" if agent_name else "¡Hola!"
-            reply = timeout_message + f"{greeting} Selecciona el estudio en el que estás:\n{opts}"
+            study_ids = [r.study_id for r in call_records if r.study_id]
+            if not study_ids:
+                user_type = "UNKNOWN"
+            else:
+                placeholders = ','.join([':p' + str(i) for i in range(len(study_ids))])
+                params = {f"p{i}": sid for i, sid in enumerate(study_ids)}
+                studies_sql = text(f"SELECT is_active, status, created_at FROM studies WHERE id IN ({placeholders})")
+                studies_records = db_users.execute(studies_sql, params).fetchall()
+                
+                has_open = False
+                has_closed = False
+                closed_dates = []
+                
+                for sr in studies_records:
+                    is_closed = (sr.is_active == 0) or (str(sr.status).lower() == 'cerrado')
+                    if is_closed:
+                        has_closed = True
+                        if sr.created_at:
+                            closed_dates.append(sr.created_at.strftime("%Y-%m-%d"))
+                    else:
+                        has_open = True
+                        
+                if has_open and not has_closed:
+                    reply = timeout_message + "Tu participación ha sido registrada. Por el momento no se ha enviado la base de súperincentivos, en algunos días que cierre el estudio y luego de 15 días te llegará el proceso para que lo redimas. ¡Gracias por participar en nuestro estudio!"
+                    db.delete(session)
+                else:
+                    date_str = closed_dates[0] if closed_dates else "recientemente"
+                    reply = timeout_message + f"Tu participación fue en un estudio que cerró el {date_str}. Te debería llegar un mensaje de súperincentivos.\n\n¿Ya hiciste los pasos para redimir tu bono?\n1. Sí\n2. No"
+                    session.state = "WAITING_BONUS_REDEEM_ANSWER"
+                    ctx["invalid_attempts"] = 0
+
+        if user_type == "UNKNOWN":
+            reply = timeout_message + "¡Hola! Gracias por comunicarte con AZ Marketing. ¿En qué podemos ayudarte?\n1. Ver estado de un incentivo o bono\n2. Referir a un amig@ para estudios de mercadeo"
+            session.state = "UNKNOWN_MENU"
+            ctx["invalid_attempts"] = 0
             
     elif state == "WAITING_STUDY":
         available = ctx.get("available_studies", [])
@@ -514,6 +560,159 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 reply, ctx = handle_invalid("Opción inválida. Responde con el número de la lista.", opts_text)
         except ValueError:
             reply, ctx = handle_invalid("Por favor, responde solo con el NÚMERO de la opción.", opts_text)
+
+    # --- NUEVAS RUTAS: RESPONDENTS & DESCONOCIDOS ---
+    
+    elif state == "WAITING_BONUS_REDEEM_ANSWER":
+        if msg == "1":
+            reply = "¡Perfecto! Gracias por participar en nuestro estudio. Esperamos contar contigo en futuras investigaciones. ¡Hasta luego!"
+            db.delete(session)
+        elif msg == "2":
+            reply = "Para redimir tu bono, por favor sigue las instrucciones de este video: Video_pendiete\n\n¡Gracias por tu participación y hasta luego!"
+            db.delete(session)
+        else:
+            reply = "⚠️ Opción inválida. \n¿Ya hiciste los pasos para redimir tu bono?\n1. Sí\n2. No"
+
+    elif state == "UNKNOWN_MENU":
+        if msg == "1":
+            reply = "Por favor, escribe el NÚMERO DE CELULAR (10 dígitos) del cual deseas consultar el estado de tu incentivo o bono:"
+            session.state = "WAITING_BOND_PHONE"
+        elif msg == "2":
+            reply = "¡Gracias por estar interesado en participar en un estudio de investigación de mercados! Por favor, regálame TU NÚMERO DE CELULAR (10 dígitos):"
+            session.state = "WAITING_REFERRAL_PHONE"
+        else:
+            reply = "⚠️ Opción inválida.\n1. Ver estado de un bono/incentivo\n2. Referir a un amig@ para un estudio"
+
+    elif state == "WAITING_BOND_PHONE":
+        bond_phone = "".join(filter(str.isdigit, msg))
+        if len(bond_phone) >= 10:
+            if bond_phone.startswith("57") and len(bond_phone) == 12:
+                bond_phone = bond_phone[2:]
+            
+            calls_sql = text("SELECT study_id FROM calls WHERE phone = :p")
+            call_records = db_users.execute(calls_sql, {"p": bond_phone}).fetchall()
+            study_ids = [r.study_id for r in call_records if r.study_id]
+            
+            if not study_ids:
+                reply = "Ese número no está registrado en nuestros estudios o bases recientes. Gracias por comunicarte, ¡hasta luego!"
+                db.delete(session)
+            else:
+                placeholders = ','.join([':p' + str(i) for i in range(len(study_ids))])
+                params = {f"p{i}": sid for i, sid in enumerate(study_ids)}
+                studies_sql = text(f"SELECT is_active, status, created_at FROM studies WHERE id IN ({placeholders})")
+                studies_records = db_users.execute(studies_sql, params).fetchall()
+                
+                has_open = False
+                has_closed = False
+                closed_dates = []
+                for sr in studies_records:
+                    if (sr.is_active == 0) or (str(sr.status).lower() == 'cerrado'):
+                        has_closed = True
+                        if sr.created_at: closed_dates.append(sr.created_at.strftime("%Y-%m-%d"))
+                    else:
+                        has_open = True
+                        
+                if has_open and not has_closed:
+                    reply = "Tu participación ha sido registrada. Por el momento no se ha enviado la base de súperincentivos, en algunos días que cierre el estudio y luego de 15 días te llegará el proceso para que lo redimas. ¡Gracias por participar en nuestro estudio!"
+                    db.delete(session)
+                else:
+                    date_str = closed_dates[0] if closed_dates else "recientemente"
+                    reply = f"El estudio en el que participaste fue cerrado el {date_str}. Te debería llegar un mensaje de súperincentivos.\n\n¿Ya hiciste los pasos para redimir tu bono?\n1. Sí\n2. No"
+                    session.state = "WAITING_BONUS_REDEEM_ANSWER"
+        else:
+            reply = "⚠️ Por favor escribe un número válido de al menos 10 dígitos."
+
+    elif state == "WAITING_REFERRAL_PHONE":
+        ref_phone = "".join(filter(str.isdigit, msg))
+        if len(ref_phone) >= 10:
+            if ref_phone.startswith("57") and len(ref_phone) == 12:
+                ref_phone = ref_phone[2:]
+                
+            six_months_ago = datetime.now() - timedelta(days=180)
+            calls_sql = text("SELECT id FROM calls WHERE phone = :p AND call_date >= :d")
+            recent_call = db_users.execute(calls_sql, {"p": ref_phone, "d": six_months_ago}).first()
+            
+            if recent_call:
+                reply = "Gracias, pero vemos que ya participaste en un estudio con nosotros en los últimos 6 meses. Por el momento no podemos registrarte de nuevo. ¡Hasta luego!"
+                db.delete(session)
+            else:
+                ctx["ref_phone"] = ref_phone
+                reply = "¡Perfecto! ¿Cuál es tu Nombre y Apellido completo?"
+                session.state = "WAITING_REFERRAL_NAME"
+        else:
+            reply = "⚠️ Por favor escribe un número válido de al menos 10 dígitos."
+
+    elif state == "WAITING_REFERRAL_NAME":
+        ctx["ref_name"] = message_raw.strip()
+        reply = "Gracias. Selecciona tu Género:\n1. Masculino\n2. Femenino\n3. Otro\n4. Prefiero no decir"
+        session.state = "WAITING_REFERRAL_GENDER"
+
+    elif state == "WAITING_REFERRAL_GENDER":
+        mapping = {"1": "Masculino", "2": "Femenino", "3": "Otro", "4": "Prefiero no decir"}
+        if msg in mapping:
+            ctx["ref_gender"] = mapping[msg]
+            reply = "¿Qué edad tienes? (Escribe el número, por ejemplo: 25)"
+            session.state = "WAITING_REFERRAL_AGE"
+        else:
+            reply = "⚠️ Responde con el número de la opción (1 al 4):\n1. Masculino\n2. Femenino\n3. Otro\n4. Prefiero no decir"
+
+    elif state == "WAITING_REFERRAL_AGE":
+        if msg.isdigit() and 10 <= int(msg) <= 100:
+            ctx["ref_age"] = int(msg)
+            reply = "¿En qué ciudad resides?\n1. Bogotá\n2. Barranquilla\n3. Cali\n4. Medellín\n5. Bucaramanga\n6. Otra"
+            session.state = "WAITING_REFERRAL_CITY"
+        else:
+            reply = "⚠️ Escribe tu edad en números (ejemplo: 30)."
+
+    elif state == "WAITING_REFERRAL_CITY":
+        mapping = {"1": "Bogotá", "2": "Barranquilla", "3": "Cali", "4": "Medellín", "5": "Bucaramanga"}
+        if msg in mapping:
+            ctx["ref_city"] = mapping[msg]
+            reply = "¿En qué barrio vives?"
+            session.state = "WAITING_REFERRAL_NEIGHBORHOOD"
+        elif msg == "6":
+            reply = "¿En qué otra ciudad vives? (Escríbela brevemente):"
+            session.state = "WAITING_REFERRAL_CITY_OTHER"
+        else:
+            reply = "⚠️ Responde con el número de la opción (1 al 6)."
+
+    elif state == "WAITING_REFERRAL_CITY_OTHER":
+        ctx["ref_city"] = message_raw.strip()
+        reply = "¿En qué barrio vives?"
+        session.state = "WAITING_REFERRAL_NEIGHBORHOOD"
+
+    elif state == "WAITING_REFERRAL_NEIGHBORHOOD":
+        ctx["ref_neighborhood"] = message_raw.strip()
+        reply = "¿Cuál es tu dirección de residencia?"
+        session.state = "WAITING_REFERRAL_ADDRESS"
+
+    elif state == "WAITING_REFERRAL_ADDRESS":
+        ctx["ref_address"] = message_raw.strip()
+        reply = "De acuerdo con la ley de protección de datos de Colombia, ¿Autorizas voluntariamente que AZ Marketing conserve estos datos para ser contactado en futuros estudios?\n1. Sí, acepto\n2. No acepto"
+        session.state = "WAITING_REFERRAL_CONSENT"
+
+    elif state == "WAITING_REFERRAL_CONSENT":
+        if msg == "1" or msg == "si":
+            referral = models.BotReferral(
+                referral_phone=ctx.get("ref_phone"),
+                referrer_phone=phone,
+                full_name=ctx.get("ref_name"),
+                gender=ctx.get("ref_gender"),
+                age=ctx.get("ref_age"),
+                city=ctx.get("ref_city"),
+                neighborhood=ctx.get("ref_neighborhood"),
+                address=ctx.get("ref_address"),
+                consent=True
+            )
+            db.add(referral)
+            db.commit()
+            reply = "¡Tus datos han sido registrados con éxito! Muchas gracias por tu tiempo, te contactaremos cuando tengamos un estudio adecuado para tu perfil. ¡Hasta luego!"
+            db.delete(session)
+        elif msg == "2" or msg == "no":
+            reply = "Entendido, no guardaremos tus datos. ¡Gracias por comunicarte con AZ Marketing, hasta luego!"
+            db.delete(session)
+        else:
+            reply = "⚠️ Por favor responde 1 para Aceptar, o 2 para Rechazar."
 
     session.context_data = json.dumps(ctx)
     db.commit()

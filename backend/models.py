@@ -31,6 +31,22 @@ class BotActiveAgent(Base):
     __tablename__ = "bot_active_agents"
     phone_number = Column(String(50), primary_key=True)
 
+class BotReferral(Base):
+    __tablename__ = "bot_referrals"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    referral_phone = Column(String(50), index=True)
+    referrer_phone = Column(String(50))
+    full_name = Column(String(100))
+    gender = Column(String(50))
+    age = Column(Integer)
+    city = Column(String(100))
+    neighborhood = Column(String(150))
+    address = Column(String(200))
+    consent = Column(Boolean, default=False)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
 class BotQuotaUpdate(Base):
     __tablename__ = "bot_quota_updates"
     
