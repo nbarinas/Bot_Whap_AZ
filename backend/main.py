@@ -565,13 +565,42 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
     
     elif state == "WAITING_BONUS_REDEEM_ANSWER":
         if msg == "1":
+            reply = "¿Pudiste resolver para el bono exitosamente?\n1. Sí pude\n2. No pude"
+            session.state = "WAITING_BONUS_RESOLVED"
+        elif msg == "2":
+            reply = "Para redimir tu bono, por favor mira este video explicativo: Video_pendiete\n\nDespués de ver el video o seguir los pasos, ¿pudiste resolver para tu bono?\n1. Sí pude\n2. No pude"
+            session.state = "WAITING_BONUS_RESOLVED"
+        else:
+            reply = "⚠️ Opción inválida. \n¿Ya hiciste los pasos para redimir tu bono?\n1. Sí\n2. No"
+
+    elif state == "WAITING_BONUS_RESOLVED":
+        if msg == "1":
             reply = "¡Perfecto! Gracias por participar en nuestro estudio. Esperamos contar contigo en futuras investigaciones. ¡Hasta luego!"
             db.delete(session)
         elif msg == "2":
-            reply = "Para redimir tu bono, por favor sigue las instrucciones de este video: Video_pendiete\n\n¡Gracias por tu participación y hasta luego!"
+            reply = "Por favor, busca en tus chats de WhatsApp si tienes un mensaje nuestro de la cuenta de 'Súperincentivos' y sigue los pasos que están en ese chat.\n\nDespués de revisar, ¿pudiste resolverlo?\n1. Sí pude\n2. No pude"
+            session.state = "WAITING_BONUS_SUPERINCENTIVOS"
+        else:
+            reply = "⚠️ Responde con 1 (Sí) o 2 (No)."
+
+    elif state == "WAITING_BONUS_SUPERINCENTIVOS":
+        if msg == "1":
+            reply = "¡Excelente! Muchas gracias por participar. ¡Hasta luego!"
+            db.delete(session)
+        elif msg == "2":
+            reply = "Entendido. Voy a escribirle a un agente humano y nos estaremos comunicando contigo a la brevedad posible para ayudarte. ¡Gracias por tu paciencia!"
+            
+            n_phone = phone[2:] if phone.startswith("57") and len(phone) == 12 else phone
+            name_sql = text("SELECT person_name FROM calls WHERE phone_number = :p OR phone_number = :np LIMIT 1")
+            name_rec = db_users.execute(name_sql, {"p": phone, "np": n_phone}).first()
+            resp_name = name_rec.person_name if (name_rec and name_rec.person_name) else "Usuario Sin Nombre"
+            
+            alert_msg = f"🚨 *Alerta de Súperincentivos*\n\nUna persona intentó redimir su bono pero reporta que NO pudo resolver el proceso (vio el video y buscó el chat).\n\n👤 *Nombre (BD):* {resp_name}\n📞 *Soporte a:* {phone}\n📅 *Fecha:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            send_whatsapp_message("573136623816", alert_msg)
+            
             db.delete(session)
         else:
-            reply = "⚠️ Opción inválida. \n¿Ya hiciste los pasos para redimir tu bono?\n1. Sí\n2. No"
+            reply = "⚠️ Responde con 1 (Sí) o 2 (No)."
 
     elif state == "UNKNOWN_MENU":
         if msg == "1":
