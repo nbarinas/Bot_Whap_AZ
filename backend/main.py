@@ -267,9 +267,14 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
     msg = message_raw.strip().lower()
     phone = phone_raw.strip()
     
+    # Check for numbers saved with or without the '57' prefix
+    normalized_phone = phone
+    if phone.startswith("57") and len(phone) == 12:
+        normalized_phone = phone[2:]
+    
     # 1. Authorize User for Quota Management
-    sql = text("SELECT role FROM users WHERE phone_number = :p")
-    user_record = db_users.execute(sql, {"p": phone}).first()
+    sql = text("SELECT role FROM users WHERE phone_number = :p OR phone_number = :np")
+    user_record = db_users.execute(sql, {"p": phone, "np": normalized_phone}).first()
     
     is_authorized = bool(user_record) or phone == "0000"
     
