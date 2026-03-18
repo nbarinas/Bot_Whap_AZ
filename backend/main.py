@@ -178,7 +178,14 @@ def toggle_study_status(study_code: str, db: Session = Depends(database.get_db),
 
 @app.get("/api/agents")
 def get_agents(db: Session = Depends(database.get_db), db_users: Session = Depends(database.get_users_db), current_user: models.User = Depends(auth.get_current_user)):
-    all_users = db_users.query(models.User).all()
+    try:
+        sql = text("SELECT username, phone_number, role, full_name FROM users WHERE phone_number IS NOT NULL AND phone_number != ''")
+        all_users = db_users.execute(sql).fetchall()
+    except Exception:
+        # Fallback si no existe la columna full_name
+        sql = text("SELECT username, phone_number, role, username as full_name FROM users WHERE phone_number IS NOT NULL AND phone_number != ''")
+        all_users = db_users.execute(sql).fetchall()
+        
     active_records = db.query(models.BotActiveAgent).all()
     active_phones = {record.phone_number for record in active_records}
     
@@ -187,6 +194,7 @@ def get_agents(db: Session = Depends(database.get_db), db_users: Session = Depen
         if u.phone_number:
             agents.append({
                 "username": u.username,
+                "full_name": u.full_name if u.full_name else u.username,
                 "phone_number": u.phone_number,
                 "role": u.role,
                 "is_active": u.phone_number in active_phones

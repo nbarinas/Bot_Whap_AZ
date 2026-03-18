@@ -409,14 +409,14 @@ async function loadAgents() {
         }
         
         let html = '<table style="width:100%; border-collapse:collapse; text-align:left;">';
-        html += '<tr style="border-bottom:2px solid var(--border-color);"><th>Teléfono</th><th>Usuario / Rol</th><th style="text-align:center;">Acceso al Bot</th></tr>';
+        html += '<tr style="border-bottom:2px solid var(--border-color);"><th>Teléfono</th><th>Nombre / Rol</th><th style="text-align:center;">Acceso al Bot</th></tr>';
         
         agents.forEach(a => {
             const isChecked = a.is_active ? 'checked' : '';
             html += `
                 <tr style="border-bottom:1px solid var(--border-color);">
                     <td style="padding:10px 0; font-weight:bold;">${a.phone_number}</td>
-                    <td style="padding:10px 0; color:var(--text-muted);">${a.username} <small>(${a.role})</small></td>
+                    <td style="padding:10px 0; color:var(--text-main); font-weight:600;">${a.full_name ? a.full_name : a.username} <br><small style="color:var(--text-muted); font-weight:normal;">Usr: ${a.username} (${a.role})</small></td>
                     <td style="padding:10px 0; text-align:center;">
                         <label style="cursor:pointer;">
                             <input type="checkbox" onchange="toggleAgentStatus('${a.phone_number}', this.checked)" ${isChecked} style="transform: scale(1.5);">
