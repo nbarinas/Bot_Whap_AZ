@@ -187,6 +187,8 @@ def send_whatsapp_message(to_phone: str, message_text: str):
     }
     try:
         response = requests.post(url, headers=headers, data=json.dumps(data))
+        if response.status_code != 200:
+            print(f"META ERROR RESPONSE: {response.text}")
         response.raise_for_status()
         print(f"WhatsApp message successfully sent to {to_phone}")
     except Exception as e:
