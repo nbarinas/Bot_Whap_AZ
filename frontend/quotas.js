@@ -54,7 +54,12 @@ async function loadQuotas() {
             return;
         }
 
+        const showClosed = document.getElementById('showClosedStudies') ? document.getElementById('showClosedStudies').checked : false;
+
         for (const [studyCode, quotas] of Object.entries(data)) {
+            const isClosed = quotas.length > 0 && quotas[0].is_closed === 1;
+            if (isClosed && !showClosed) continue;
+            
             const root = {};
 
             quotas.forEach(q => {
@@ -78,17 +83,23 @@ async function loadQuotas() {
 
             const html = renderTreeHtml(root, true);
 
+            const statusBadge = isClosed ? '<span style="background:var(--text-muted); color:white; padding:2px 8px; border-radius:10px; margin-left:10px; font-size:0.8rem;"><i class="fas fa-archive"></i> Cerrado</span>' : '';
+            const lockIcon = isClosed ? 'fa-lock-open' : 'fa-lock';
+            const lockColor = isClosed ? '#10b981' : '#64748b';
+            const lockTitle = isClosed ? 'Reabrir Estudio' : 'Cerrar Estudio (Ocultar del bot)';
+
             const studyWrapper = document.createElement('div');
             studyWrapper.className = 'htable-container';
             studyWrapper.innerHTML = `
-                <div class="study-label">
-                    <span>ESTUDIO: ${studyCode}  <span style="font-size:0.8rem; background:rgba(255,255,255,0.2); color:white; padding:2px 8px; border-radius:10px; margin-left:10px;">${quotas.length} ítems</span></span>
+                <div class="study-label" style="${isClosed ? 'background: #94a3b8;' : ''}">
+                    <span>ESTUDIO: ${studyCode} ${statusBadge} <span style="font-size:0.8rem; background:rgba(255,255,255,0.2); color:white; padding:2px 8px; border-radius:10px; margin-left:10px;">${quotas.length} ítems</span></span>
                     <div style="display:flex; gap: 8px;">
+                        <button onclick="toggleStudyStatus('${studyCode}')" style="background:${lockColor}; color:white; border:none; padding:4px 10px; border-radius:6px; cursor:pointer;" title="${lockTitle}"><i class="fas ${lockIcon}"></i></button>
                         <button onclick="editStudy('${studyCode}')" style="background:var(--warning); color:white; border:none; padding:4px 10px; border-radius:6px; cursor:pointer;" title="Editar Estudio"><i class="fas fa-edit"></i></button>
                         <button onclick="deleteStudyGlobal('${studyCode}')" style="background:var(--danger); color:white; border:none; padding:4px 10px; border-radius:6px; cursor:pointer;" title="Eliminar Estudio"><i class="fas fa-trash-alt"></i></button>
                     </div>
                 </div>
-                <div class="htable-root-groups">${html}</div>
+                <div class="htable-root-groups" style="${isClosed ? 'opacity:0.6; pointer-events:none;' : ''}">${html}</div>
             `;
             container.appendChild(studyWrapper);
         }
@@ -359,7 +370,6 @@ async function simulateWebhook() {
         responseBox.style.color = data.reply.includes('❌') ? 'var(--danger)' : '#166534';
         responseBox.style.borderColor = data.reply.includes('❌') ? 'var(--danger)' : '#22c55e';
 
-        // Recargar cuotas para ver el impacto
         loadQuotas();
     } catch (e) {
         console.error(e);
@@ -367,3 +377,74 @@ async function simulateWebhook() {
         responseBox.style.color = 'var(--danger)';
     }
 }
+
+async function toggleStudyStatus(studyCode) {
+    if (!confirm(`¿Deseas cambiar el estado (Abrir/Cerrar) del estudio ${studyCode}?`)) return;
+    try {
+        const res = await fetchWithAuth(`/api/quotas/study/${studyCode}/toggle-status`, { method: 'PUT' });
+        if (res.ok) loadQuotas();
+    } catch (e) { console.error(e); }
+}
+
+function openAgentsModal() {
+    document.getElementById('agentsModal').style.display = 'flex';
+    loadAgents();
+}
+
+function closeAgentsModal() {
+    document.getElementById('agentsModal').style.display = 'none';
+}
+
+async function loadAgents() {
+    const container = document.getElementById('agentsListContainer');
+    container.innerHTML = '<p style="text-align:center;">Cargando...</p>';
+    try {
+        const res = await fetchWithAuth('/api/agents');
+        if (!res.ok) { container.innerHTML = '<p>Error cargando encuestadores.</p>'; return; }
+        const agents = await res.json();
+        
+        if (agents.length === 0) {
+            container.innerHTML = '<p style="text-align:center;">No hay usuarios en la base de datos.</p>';
+            return;
+        }
+        
+        let html = '<table style="width:100%; border-collapse:collapse; text-align:left;">';
+        html += '<tr style="border-bottom:2px solid var(--border-color);"><th>Teléfono</th><th>Usuario / Rol</th><th style="text-align:center;">Acceso al Bot</th></tr>';
+        
+        agents.forEach(a => {
+            const isChecked = a.is_active ? 'checked' : '';
+            html += `
+                <tr style="border-bottom:1px solid var(--border-color);">
+                    <td style="padding:10px 0; font-weight:bold;">${a.phone_number}</td>
+                    <td style="padding:10px 0; color:var(--text-muted);">${a.username} <small>(${a.role})</small></td>
+                    <td style="padding:10px 0; text-align:center;">
+                        <label style="cursor:pointer;">
+                            <input type="checkbox" onchange="toggleAgentStatus('${a.phone_number}', this.checked)" ${isChecked} style="transform: scale(1.5);">
+                        </label>
+                    </td>
+                </tr>
+            `;
+        });
+        html += '</table>';
+        container.innerHTML = html;
+        
+    } catch (e) {
+        console.error(e);
+        container.innerHTML = '<p>Error de conexión.</p>';
+    }
+}
+
+async function toggleAgentStatus(phone, isActive) {
+    try {
+        const res = await fetchWithAuth('/api/agents/toggle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone_number: phone, is_active: isActive })
+        });
+        if (!res.ok) alert("Debes ser Superuser para cambiar accesos.");
+    } catch (e) {
+        console.error(e);
+        alert("Error cambiando el acceso del encuestador.");
+    }
+}
+

@@ -22,9 +22,14 @@ class BotQuota(Base):
     value = Column(String(100)) 
     target_count = Column(Integer, default=0) 
     current_count = Column(Integer, default=0) 
+    is_closed = Column(Integer, default=0) # 0 = open, 1 = closed
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+class BotActiveAgent(Base):
+    __tablename__ = "bot_active_agents"
+    phone_number = Column(String(50), primary_key=True)
 
 class BotQuotaUpdate(Base):
     __tablename__ = "bot_quota_updates"

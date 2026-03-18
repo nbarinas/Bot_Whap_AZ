@@ -28,6 +28,12 @@ app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 @app.on_event("startup")
 def on_startup():
     models.Base.metadata.create_all(bind=database.bot_engine)
+    try:
+        from sqlalchemy import text
+        with database.bot_engine.begin() as conn:
+            conn.execute(text("ALTER TABLE bot_quotas ADD COLUMN is_closed INTEGER DEFAULT 0"))
+    except Exception:
+        pass # Column presumably exists
 
 @app.get("/")
 def read_root():
@@ -77,7 +83,8 @@ def get_bot_quotas(study_code: Optional[str] = None, db: Session = Depends(datab
             "category": q.category,
             "value": q.value,
             "target_count": q.target_count,
-            "current_count": q.current_count
+            "current_count": q.current_count,
+            "is_closed": q.is_closed
         })
     return result
 
@@ -156,6 +163,51 @@ def delete_study(study_code: str, db: Session = Depends(database.get_db), curren
         db.delete(q)
     db.commit()
     return {"msg": "Study deleted"}
+
+@app.put("/api/quotas/study/{study_code}/toggle-status")
+def toggle_study_status(study_code: str, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
+    quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
+    if not quotas:
+        raise HTTPException(status_code=404, detail="Study not found")
+        
+    new_status = 1 if quotas[0].is_closed == 0 else 0
+    for q in quotas:
+        q.is_closed = new_status
+    db.commit()
+    return {"msg": f"Study {'closed' if new_status else 'opened'}", "is_closed": new_status}
+
+@app.get("/api/agents")
+def get_agents(db: Session = Depends(database.get_db), db_users: Session = Depends(database.get_users_db), current_user: models.User = Depends(auth.get_current_user)):
+    all_users = db_users.query(models.User).all()
+    active_records = db.query(models.BotActiveAgent).all()
+    active_phones = {record.phone_number for record in active_records}
+    
+    agents = []
+    for u in all_users:
+        if u.phone_number:
+            agents.append({
+                "username": u.username,
+                "phone_number": u.phone_number,
+                "role": u.role,
+                "is_active": u.phone_number in active_phones
+            })
+    return agents
+
+class AgentToggleRequest(BaseModel):
+    phone_number: str
+    is_active: bool
+
+@app.post("/api/agents/toggle")
+def toggle_agent(req: AgentToggleRequest, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
+    record = db.query(models.BotActiveAgent).filter(models.BotActiveAgent.phone_number == req.phone_number).first()
+    if req.is_active and not record:
+        new_agent = models.BotActiveAgent(phone_number=req.phone_number)
+        db.add(new_agent)
+    elif not req.is_active and record:
+        db.delete(record)
+        
+    db.commit()
+    return {"msg": "Agent status updated"}
 
 class WebhookSimulateRequest(BaseModel):
     phone_number: str
@@ -273,15 +325,35 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         normalized_phone = phone[2:]
     
     # 1. Authorize User for Quota Management
-    sql = text("SELECT role FROM users WHERE phone_number = :p OR phone_number = :np")
-    user_record = db_users.execute(sql, {"p": phone, "np": normalized_phone}).first()
+    sql = text("SELECT role, full_name FROM users WHERE phone_number = :p OR phone_number = :np")
+    try:
+        user_record = db_users.execute(sql, {"p": phone, "np": normalized_phone}).first()
+    except Exception:
+        # Fallback si no existe la columna full_name
+        sql = text("SELECT role, username as full_name FROM users WHERE phone_number = :p OR phone_number = :np")
+        user_record = db_users.execute(sql, {"p": phone, "np": normalized_phone}).first()
     
-    is_authorized = bool(user_record) or phone == "0000"
+    is_in_base = bool(user_record)
+    agent_name = ""
+    if user_record and hasattr(user_record, 'full_name') and user_record.full_name:
+        agent_name = user_record.full_name.split(" ")[0].capitalize() # Solo el primer nombre
+    elif phone == "0000":
+        agent_name = "Admin"
+    
+    active_agent = db.query(models.BotActiveAgent).filter(
+        (models.BotActiveAgent.phone_number == phone) | 
+        (models.BotActiveAgent.phone_number == normalized_phone)
+    ).first()
+    is_active = bool(active_agent)
+    
+    is_authorized = is_active or phone == "0000"
     
     if not is_authorized:
-        # Strict Validation: Only registered agents can use the bot
-        reply = "🚫 Acceso denegado. Este número de teléfono no está autorizado como encuestador."
-        
+        if is_in_base:
+            reply = "⚠️ Por el momento no estás activo para registrar cuotas."
+        else:
+            reply = "🚫 Acceso denegado. Este número de teléfono no está registrado en la base de la empresa."
+            
         # Log this interaction
         log = models.BotQuotaUpdate(
             study_code="UNAUTHORIZED",
@@ -340,7 +412,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
 
     if state == "IDLE":
         # Ask for study
-        studies = db.query(models.BotQuota.study_code).distinct().all()
+        studies = db.query(models.BotQuota.study_code).filter(models.BotQuota.is_closed == 0).distinct().all()
         if not studies:
             reply = timeout_message + "No hay estudios activos en este momento."
         else:
@@ -350,7 +422,8 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             session.state = "WAITING_STUDY"
             
             opts = "\n".join([f"{i+1}. {s}" for i, s in enumerate(study_list)])
-            reply = timeout_message + f"¡Hola! Selecciona el estudio en el que estás:\n{opts}"
+            greeting = f"¡Hola {agent_name}!" if agent_name else "¡Hola!"
+            reply = timeout_message + f"{greeting} Selecciona el estudio en el que estás:\n{opts}"
             
     elif state == "WAITING_STUDY":
         available = ctx.get("available_studies", [])

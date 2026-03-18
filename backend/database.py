@@ -19,6 +19,9 @@ if BOT_DB_URL.startswith("mysql://"):
 
 bot_engine = create_engine(
     BOT_DB_URL, 
+    pool_size=10, 
+    max_overflow=20,
+    pool_pre_ping=True,
     connect_args={"check_same_thread": False} if "sqlite" in BOT_DB_URL else {},
     pool_recycle=280 if "mysql" in BOT_DB_URL else -1 # Prevent "Gone away" for MySQL
 )
@@ -36,6 +39,9 @@ if USERS_DB_URL and USERS_DB_URL.startswith("mysql://"):
 
 users_engine = create_engine(
     USERS_DB_URL, 
+    pool_size=10, 
+    max_overflow=20,
+    pool_pre_ping=True,
     connect_args={"check_same_thread": False} if "sqlite" in USERS_DB_URL else {},
     pool_recycle=280 if "mysql" in USERS_DB_URL else -1
 )
