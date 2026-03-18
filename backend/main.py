@@ -310,12 +310,11 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
     
     timeout_message = ""
     if session and session.updated_at:
-        now = datetime.now(timezone.utc)
-        session_time = session.updated_at
-        if session_time.tzinfo is None:
-            session_time = session_time.replace(tzinfo=timezone.utc)
-            
-        if now - session_time > timedelta(minutes=5):
+        now = datetime.now() # Use local server time
+        session_time = session.updated_at.replace(tzinfo=None)
+        
+        # If difference is more than 5 minutes (300 seconds)
+        if abs((now - session_time).total_seconds()) > 300:
             db.delete(session)
             db.commit()
             session = None
