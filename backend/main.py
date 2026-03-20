@@ -227,8 +227,8 @@ import requests
 from sqlalchemy import text
 
 # WhatsApp Configuration Constants (Use environment variables in production)
-WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "EAAXs5LUMDHoBQ6fh0CDjwAgYPNQD5jDqzib5xgCAHPQ4XkTa0AMBAvNyCvLGZCnZCs5QAIGOQFLG4xDDUorTNsZA9ZAsk1wmUQyXQ6w0tdYrZCIDhQLarbrsjzt23OZAZAKAi2oFlmtxYDWlasB3jylqx1NlwUfsolJxFJaBPDdf1bvUvUKqzajoX0ZBKAgV80WUM26Qkh2caLRnTqZCyz4oziqZCuKN9g7RcfrTsppzSqI8Fl1UuzxfzZBd5067KbAeVnXAdtG3xxK6ZCYKuToc2gZDZD")
-WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID", "933487246524604")
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "EAAXs5LUMDHoBQ3gidC32OLGzDEZC4uhZCAWI0WNVvk8nnKg4ewiYo4a0pQi9qhjhXwAZC94UoSg6BsPQzFqjPIYiTu6rQqkhqihEbIG5zfKTpqN3tcrce9dUR4UOCYR7qKYov3IILAcUcQUJjuAIZBZBo5koizRGSI7vBUkmD8nV2aK8xqwLAfoCR3MWWvAG6sF5GfInh5sBdQz6nPsR9fowIYhkKK3f8r80r5GJHTlSohpiWwEZB7rowThW38oH3PANfXZANosc8sFhZBwYKAaCZAR719T0ZA9rUZD")
+WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID", "969902462880750")
 WHATSAPP_VERIFY_TOKEN = os.getenv("WHATS_VERIFY_TOKEN", "azbot_secreto_2026")
 
 def send_whatsapp_message(to_phone: str, message_text: str):
@@ -253,6 +253,40 @@ def send_whatsapp_message(to_phone: str, message_text: str):
         print(f"WhatsApp message successfully sent to {to_phone}")
     except Exception as e:
         print(f"Error sending WhatsApp message to {to_phone}: {str(e)}")
+
+def send_whatsapp_media(to_phone: str, media_type: str, media_id: str, caption: str = None):
+    """
+    Sends an image or video using its Meta media_id.
+    media_type: 'image' or 'video'
+    """
+    url = f"https://graph.facebook.com/v22.0/{WHATSAPP_PHONE_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "messaging_product": "whatsapp",
+        "to": to_phone,
+        "type": media_type,
+        [media_type]: {
+            "id": media_id
+        }
+    }
+    
+    if caption and media_type == 'image':
+        data["image"]["caption"] = caption
+    elif caption and media_type == 'video':
+        data["video"]["caption"] = caption
+
+    try:
+        response = requests.post(url, headers=headers, data=json.dumps(data))
+        if response.status_code != 200:
+            print(f"META ERROR RESPONSE (MEDIA): {response.text}")
+        response.raise_for_status()
+        print(f"WhatsApp {media_type} successfully sent to {to_phone}")
+    except Exception as e:
+        print(f"Error sending WhatsApp {media_type} to {to_phone}: {str(e)}")
 
 
 from fastapi import Request
@@ -568,7 +602,16 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             reply = "¿Pudiste resolver para el bono exitosamente?\n1. Sí pude\n2. No pude"
             session.state = "WAITING_BONUS_RESOLVED"
         elif msg == "2":
-            reply = "Para redimir tu bono, por favor mira este video explicativo: Video_pendiete\n\nDespués de ver el video o seguir los pasos, ¿pudiste resolver para tu bono?\n1. Sí pude\n2. No pude"
+            # IDs de los archivos en Meta (estos deben ser generados con un token válido)
+            # Para bono.jpeg y Video Bono Comprimido.mp4
+            IMAGE_ID = "1292705149412146" 
+            VIDEO_ID = "934845532580264"
+            
+            if IMAGE_ID != "PENDIENTE_TOKEN_INVALIDO" and phone != "0000":
+                send_whatsapp_media(phone, "image", IMAGE_ID, "📸 Imagen del bono")
+                send_whatsapp_media(phone, "video", VIDEO_ID, "🎥 Video explicativo")
+
+            reply = "Para redimir tu bono, por favor mira este video explicativo que te acabamos de enviar.\n\nDespués de ver el video o seguir los pasos, ¿pudiste resolver para tu bono?\n1. Sí pude\n2. No pude"
             session.state = "WAITING_BONUS_RESOLVED"
         else:
             reply = "⚠️ Opción inválida. \n¿Ya hiciste los pasos para redimir tu bono?\n1. Sí\n2. No"
