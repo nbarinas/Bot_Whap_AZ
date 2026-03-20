@@ -269,7 +269,7 @@ def send_whatsapp_media(to_phone: str, media_type: str, media_id: str, caption: 
         "messaging_product": "whatsapp",
         "to": to_phone,
         "type": media_type,
-        [media_type]: {
+        media_type: {
             "id": media_id
         }
     }
