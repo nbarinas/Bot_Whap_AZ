@@ -552,7 +552,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             else:
                 placeholders = ','.join([':p' + str(i) for i in range(len(study_ids))])
                 params = {f"p{i}": sid for i, sid in enumerate(study_ids)}
-                studies_sql = text(f"SELECT is_active, status, created_at FROM studies WHERE id IN ({placeholders})")
+                studies_sql = text(f"SELECT is_active, status, created_at FROM studies WHERE id IN ({placeholders}) ORDER BY created_at DESC, id DESC LIMIT 1")
                 studies_records = db_users.execute(studies_sql, params).fetchall()
                 
                 has_open = False
@@ -733,7 +733,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 FROM calls c
                 LEFT JOIN studies s ON c.study_id = s.id
                 WHERE c.phone_number = :p OR c.phone_number = :np
-                ORDER BY c.created_at DESC
+                ORDER BY s.created_at DESC, c.id DESC
                 LIMIT 1
             """)
             record = db_users.execute(calls_sql, {"p": val_phone, "np": "57" + val_phone}).first()
@@ -861,7 +861,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             else:
                 placeholders = ','.join([':p' + str(i) for i in range(len(study_ids))])
                 params = {f"p{i}": sid for i, sid in enumerate(study_ids)}
-                studies_sql = text(f"SELECT is_active, status, created_at FROM studies WHERE id IN ({placeholders})")
+                studies_sql = text(f"SELECT is_active, status, created_at FROM studies WHERE id IN ({placeholders}) ORDER BY created_at DESC, id DESC LIMIT 1")
                 studies_records = db_users.execute(studies_sql, params).fetchall()
                 
                 has_open = False
