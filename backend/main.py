@@ -734,13 +734,29 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 LEFT JOIN studies s ON c.study_id = s.id
                 WHERE c.phone_number = :p OR c.phone_number = :np
                 ORDER BY s.created_at DESC, c.id DESC
-                LIMIT 1
             """)
-            record = db_users.execute(calls_sql, {"p": val_phone, "np": "57" + val_phone}).first()
-            if record:
-                date_str = record.created_at.strftime('%Y-%m-%d') if record.created_at else "desconocida"
-                study_name = record.study_name if record.study_name else "desconocido"
-                reply = f"⚠️ Ojo, esta persona está en la base *{study_name}* de fecha *{date_str}*.\n\n¿Quieres validar otro número?"
+            records = db_users.execute(calls_sql, {"p": val_phone, "np": "57" + val_phone}).fetchall()
+            if records:
+                total_count = len(records)
+                latest = records[0]
+                latest_date_str = latest.created_at.strftime('%Y-%m-%d') if latest.created_at else "desconocida"
+                latest_study = latest.study_name if latest.study_name else "desconocido"
+                
+                if total_count == 1:
+                    reply = f"⚠️ Ojo, esta persona participo la ultima vez en la base *{latest_study}* de fecha *{latest_date_str}*.\n\nEn total ha participado 1 vez.\n\n¿Quieres validar otro número?"
+                else:
+                    historial = []
+                    # Mostramos hasta las últimas 5 adicionales
+                    for r in records[1:6]:
+                        d_str = r.created_at.strftime('%Y-%m-%d') if r.created_at else "desconocida"
+                        s_name = r.study_name if r.study_name else "desconocido"
+                        historial.append(f"• {s_name} ({d_str})")
+                        
+                    if total_count > 6:
+                        historial.append(f"... y {total_count - 6} más.")
+                        
+                    historial_str = "\n".join(historial)
+                    reply = f"⚠️ Ojo, esta persona participo la ultima vez en la base *{latest_study}* de fecha *{latest_date_str}*.\n\nEn total ha participado *{total_count} veces*. Historial reciente:\n{historial_str}\n\n¿Quieres validar otro número?"
             else:
                 reply = "✅ El número no está en la base. Puede hacer encuesta.\n\n¿Quieres validar otro número?"
                 
