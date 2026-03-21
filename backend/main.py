@@ -740,14 +740,25 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             if record:
                 date_str = record.created_at.strftime('%Y-%m-%d') if record.created_at else "desconocida"
                 study_name = record.study_name if record.study_name else "desconocido"
-                reply = f"⚠️ Ojo, esta persona está en la base *{study_name}* de fecha *{date_str}*.\n\n¿Quieres validar otro número?\n1. Sí\n2. No o cerrar"
+                reply = f"⚠️ Ojo, esta persona está en la base *{study_name}* de fecha *{date_str}*.\n\n¿Quieres validar otro número?"
             else:
-                reply = "✅ El número no está en la base. Puede hacer encuesta.\n\n¿Quieres validar otro número?\n1. Sí\n2. No o cerrar"
+                reply = "✅ El número no está en la base. Puede hacer encuesta.\n\n¿Quieres validar otro número?"
                 
             session.state = "WAITING_VALIDATION_MORE"
             ctx["invalid_attempts"] = 0
+            interactive_data = {
+                "type": "button",
+                "body": {"text": reply},
+                "action": {
+                    "buttons": [
+                        {"type": "reply", "reply": {"id": "1", "title": "Sí"}},
+                        {"type": "reply", "reply": {"id": "2", "title": "No o cerrar"}}
+                    ]
+                }
+            }
+            ctx["interactive_fallback"] = interactive_data
         else:
-            reply, ctx = handle_invalid("Por favor escribe un número válido de al menos 10 dígitos.", "")
+            reply, interactive_data, ctx = handle_invalid("Por favor escribe un número válido de al menos 10 dígitos.", "", ctx.get("interactive_fallback"))
             
     elif state == "WAITING_VALIDATION_MORE":
         if msg in ["1", "si", "sí"]:
