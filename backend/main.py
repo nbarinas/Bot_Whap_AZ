@@ -288,6 +288,30 @@ def send_whatsapp_media(to_phone: str, media_type: str, media_id: str, caption: 
     except Exception as e:
         print(f"Error sending WhatsApp {media_type} to {to_phone}: {str(e)}")
 
+def send_whatsapp_interactive(to_phone: str, interactive_data: dict):
+    """
+    Sends an interactive message (Buttons or Lists) via Meta API.
+    """
+    url = f"https://graph.facebook.com/v22.0/{WHATSAPP_PHONE_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "messaging_product": "whatsapp",
+        "to": to_phone,
+        "type": "interactive",
+        "interactive": interactive_data
+    }
+    try:
+        response = requests.post(url, headers=headers, data=json.dumps(data))
+        if response.status_code != 200:
+            print(f"META ERROR RESPONSE (INTERACTIVE): {response.text}")
+        response.raise_for_status()
+        print(f"WhatsApp interactive successfully sent to {to_phone}")
+    except Exception as e:
+        print(f"Error sending WhatsApp interactive to {to_phone}: {str(e)}")
+
 
 from fastapi import Request
 
@@ -328,11 +352,20 @@ async def receive_whatsapp_webhook(request: Request, db: Session = Depends(datab
                         for msg_data in value["messages"]:
                             # Meta includes the country code, e.g., "573172376156"
                             phone = msg_data.get("from")
-                            # We only handle text messages right now
+                            # We handle both text and interactive replies
+                            text_msg = ""
                             if msg_data.get("type") == "text":
                                 text_msg = msg_data["text"]["body"]
+                            elif msg_data.get("type") == "interactive":
+                                interactive = msg_data.get("interactive", {})
+                                iter_type = interactive.get("type")
+                                if iter_type == "button_reply":
+                                    text_msg = interactive["button_reply"]["id"]
+                                elif iter_type == "list_reply":
+                                    text_msg = interactive["list_reply"]["id"]
+                                    
+                            if text_msg:
                                 print(f"Received WhatsApp MSG from {phone}: {text_msg}")
-                                
                                 # Process it using our core logic
                                 process_bot_message(phone, text_msg, db, db_users)
                                 
@@ -350,13 +383,14 @@ def simulate_whatsapp_webhook(req: WebhookSimulateRequest, db: Session = Depends
     """
     Legacy/Simulator endpoint used by the frontend.
     """
-    reply = process_bot_message(req.phone_number, req.message, db, db_users)
-    return {"reply": reply}
+    reply, interactive = process_bot_message(req.phone_number, req.message, db, db_users)
+    return {"reply": reply, "interactive": interactive}
 
 
-def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users: Session) -> str:
+def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users: Session) -> tuple[str, dict]:
     """
     Core bot logic extracted from the simulator so both endpoints can share it.
+    Returns (reply_text, interactive_data_dict)
     """
     msg = message_raw.strip().lower()
     phone = phone_raw.strip()
@@ -402,19 +436,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         else:
             user_type = "UNKNOWN"
             
-    if user_type == "INACTIVE_AGENT":
-        reply = "⚠️ Por el momento no estás activo para registrar cuotas."
-        log = models.BotQuotaUpdate(
-            study_code="UNAUTHORIZED",
-            phone_number=phone,
-            message_text=message_raw,
-            parsed_updates=reply
-        )
-        db.add(log)
-        db.commit()
-        if phone != "0000":
-            send_whatsapp_message(phone, reply)
-        return reply
+
     
     from datetime import datetime, timedelta, timezone
     
@@ -448,21 +470,51 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
     ctx = json.loads(session.context_data)
     state = session.state
     reply = ""
+    interactive_data = None
 
-    def handle_invalid(err_msg, options_text):
+    def handle_invalid(err_msg, options_text, interactive_fallback=None):
         attempts = ctx.get("invalid_attempts", 0) + 1
         if attempts >= 3:
             session.state = "IDLE"
-            return "🚫 Demasiados intentos inválidos. La sesión se ha reiniciado.\n👋 Escribe 'Hola' para empezar de nuevo.", {}
+            return "🚫 Demasiados intentos inválidos. La sesión se ha reiniciado.\n👋 Escribe 'Hola' para empezar de nuevo.", None, {}
         ctx["invalid_attempts"] = attempts
-        return f"⚠️ {err_msg}\n\nOpciones disponibles:\n{options_text}", ctx
+        return f"⚠️ {err_msg}\n\nOpciones disponibles:\n{options_text}", interactive_fallback, ctx
 
     if state == "IDLE":
-        if user_type == "AGENT":
+        if user_type == "INACTIVE_AGENT":
+            reply = "⚠️ Por el momento no estás activo para registrar cuotas.\n\nSin embargo, puedes validar números en base:"
+            session.state = "WAITING_INACTIVE_ACTION"
+            ctx["invalid_attempts"] = 0
+            interactive_data = {
+                "type": "button",
+                "body": {"text": reply},
+                "action": {
+                    "buttons": [
+                        {"type": "reply", "reply": {"id": "1", "title": "Validar número"}},
+                        {"type": "reply", "reply": {"id": "2", "title": "Salir"}}
+                    ]
+                }
+            }
+            ctx["interactive_fallback"] = interactive_data
+            
+        elif user_type == "AGENT":
             # Ask for study
             studies = db.query(models.BotQuota.study_code).filter(models.BotQuota.is_closed == 0).distinct().all()
             if not studies:
                 reply = timeout_message + "No hay estudios activos en este momento."
+                ctx["available_studies"] = []
+                ctx["validate_option_idx"] = 1
+                session.state = "WAITING_STUDY"
+                interactive_data = {
+                    "type": "button",
+                    "body": {"text": reply},
+                    "action": {
+                        "buttons": [
+                            {"type": "reply", "reply": {"id": "1", "title": "Validar número"}}
+                        ]
+                    }
+                }
+                ctx["interactive_fallback"] = interactive_data
             else:
                 study_list = [s[0] for s in studies]
                 ctx["available_studies"] = study_list
@@ -470,8 +522,25 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 session.state = "WAITING_STUDY"
                 
                 opts = "\n".join([f"{i+1}. {s}" for i, s in enumerate(study_list)])
+                validate_idx = len(study_list) + 1
+                opts += f"\n{validate_idx}. Validar número en la base"
+                ctx["validate_option_idx"] = validate_idx
+                
                 greeting = f"¡Hola {agent_name}!" if agent_name else "¡Hola!"
-                reply = timeout_message + f"{greeting} Selecciona el estudio en el que estás:\n{opts}"
+                reply = timeout_message + f"{greeting} ¿Qué deseas hacer?"
+                
+                rows = [{"id": str(i+1), "title": s[:24]} for i, s in enumerate(study_list)]
+                rows.append({"id": str(validate_idx), "title": "Validar en base"})
+                
+                interactive_data = {
+                    "type": "list",
+                    "body": {"text": reply},
+                    "action": {
+                        "button": "Ver Opciones",
+                        "sections": [{"title": "Estudios Disponibles", "rows": rows}]
+                    }
+                }
+                ctx["interactive_fallback"] = interactive_data
                 
         elif user_type == "RESPONDENT":
             calls_sql = text("SELECT study_id FROM calls WHERE phone_number = :p OR phone_number = :np")
@@ -504,33 +573,73 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     db.delete(session)
                 else:
                     date_str = closed_dates[0] if closed_dates else "recientemente"
-                    reply = timeout_message + f"Tu participación fue en un estudio que cerró el {date_str}. Te debería llegar un mensaje de súperincentivos.\n\n¿Ya hiciste los pasos para redimir tu bono?\n1. Sí\n2. No"
+                    reply = timeout_message + f"Tu participación fue en un estudio que cerró el {date_str}. Te debería llegar un mensaje de súperincentivos.\n\n¿Ya hiciste los pasos para redimir tu bono?"
                     session.state = "WAITING_BONUS_REDEEM_ANSWER"
                     ctx["invalid_attempts"] = 0
+                    interactive_data = {
+                        "type": "button",
+                        "body": {"text": reply},
+                        "action": {
+                            "buttons": [
+                                {"type": "reply", "reply": {"id": "1", "title": "Sí"}},
+                                {"type": "reply", "reply": {"id": "2", "title": "No"}}
+                            ]
+                        }
+                    }
+                    ctx["interactive_fallback"] = interactive_data
 
         if user_type == "UNKNOWN":
-            reply = timeout_message + "¡Hola! Gracias por comunicarte con AZ Marketing. ¿En qué podemos ayudarte?\n1. Ver estado de un incentivo o bono\n2. Referir a un amig@ para estudios de mercadeo"
+            reply = timeout_message + "¡Hola! Gracias por comunicarte con AZ Marketing. ¿En qué podemos ayudarte?"
             session.state = "UNKNOWN_MENU"
             ctx["invalid_attempts"] = 0
+            interactive_data = {
+                "type": "button",
+                "body": {"text": reply},
+                "action": {
+                    "buttons": [
+                        {"type": "reply", "reply": {"id": "1", "title": "Incentivo o bono"}},
+                        {"type": "reply", "reply": {"id": "2", "title": "Referir a un amig@"}}
+                    ]
+                }
+            }
+            ctx["interactive_fallback"] = interactive_data
             
     elif state == "WAITING_STUDY":
         available = ctx.get("available_studies", [])
+        validate_idx = ctx.get("validate_option_idx")
         opts_text = "\n".join([f"{i+1}. {s}" for i, s in enumerate(available)])
+        opts_text += f"\n{validate_idx}. Validar número en la base" if validate_idx else ""
         try:
-            choice = int(msg) - 1
-            if 0 <= choice < len(available):
-                study_code = available[choice]
+            choice = int(msg)
+            if 1 <= choice <= len(available):
+                study_code = available[choice - 1]
                 ctx["study_code"] = study_code
                 ctx["invalid_attempts"] = 0
                 session.state = "WAITING_ACTION"
-                reply = f"Estudio {study_code} seleccionado. ¿Qué deseas hacer?\n1. Añadir 1 encuesta\n2. Borrar mi última encuesta\n3. Ver cuotas actuales"
+                reply = f"Estudio {study_code} seleccionado. ¿Qué deseas hacer?"
+                interactive_data = {
+                    "type": "button",
+                    "body": {"text": reply},
+                    "action": {
+                        "buttons": [
+                            {"type": "reply", "reply": {"id": "1", "title": "Añadir 1 encuesta"}},
+                            {"type": "reply", "reply": {"id": "2", "title": "Borrar mi última"}},
+                            {"type": "reply", "reply": {"id": "3", "title": "Ver cuotas actuales"}}
+                        ]
+                    }
+                }
+                ctx["interactive_fallback"] = interactive_data
+            elif validate_idx and choice == validate_idx:
+                reply = "Por favor, digite el número de celular a validar:"
+                session.state = "WAITING_VALIDATION_PHONE"
+                ctx["invalid_attempts"] = 0
             else:
-                reply, ctx = handle_invalid("Opción inválida. Responde con el número de la lista.", opts_text)
+                reply, interactive_data, ctx = handle_invalid("Opción inválida.", opts_text, ctx.get("interactive_fallback"))
         except ValueError:
-            reply, ctx = handle_invalid("Por favor, responde solo con el NÚMERO de la opción.", opts_text)
+            reply, interactive_data, ctx = handle_invalid("Selección inválida.", opts_text, ctx.get("interactive_fallback"))
 
     elif state == "WAITING_ACTION":
-        opts_text = "1. Añadir 1 encuesta\n2. Borrar mi última encuesta\n3. Ver cuotas actuales"
+        opts_text = "1. Añadir 1 encuesta\n2. Borrar mi última\n3. Ver cuotas actuales"
         if msg == "2":
             # Delete last submission
             study_code = ctx.get("study_code")
@@ -570,10 +679,12 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             ctx["action"] = "ADD"
             ctx["selected_path"] = []
             ctx["invalid_attempts"] = 0
-            reply, next_state = compute_next_bot_step(db, ctx, phone)
+            reply_text, next_state, next_interactive = compute_next_bot_step_interactive(db, ctx, phone)
+            reply = reply_text
+            interactive_data = next_interactive
             session.state = next_state
         else:
-            reply, ctx = handle_invalid("Responde 1 para Añadir, 2 para Borrar o 3 para Ver cuotas.", opts_text)
+            reply, interactive_data, ctx = handle_invalid("Selección inválida.", opts_text, ctx.get("interactive_fallback"))
 
     elif state == "WAITING_CATEGORY":
         # Handle the category selection
@@ -586,14 +697,69 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 ctx["selected_path"].append(chosen_val)
                 ctx["invalid_attempts"] = 0
                 # Compute next step
-                reply, next_state = compute_next_bot_step(db, ctx, phone)
+                reply_text, next_state, next_interactive = compute_next_bot_step_interactive(db, ctx, phone)
+                reply = reply_text
+                interactive_data = next_interactive
                 session.state = next_state
                 if next_state == "IDLE":
                     ctx = {} # Clean up
             else:
-                reply, ctx = handle_invalid("Opción inválida. Responde con el número de la lista.", opts_text)
+                reply, interactive_data, ctx = handle_invalid("Opción inválida.", opts_text, ctx.get("interactive_fallback"))
         except ValueError:
-            reply, ctx = handle_invalid("Por favor, responde solo con el NÚMERO de la opción.", opts_text)
+            reply, interactive_data, ctx = handle_invalid("Selección inválida.", opts_text, ctx.get("interactive_fallback"))
+
+    # --- NUEVA RUTA: ESTADO VALIDACION NUMEROS ---
+    
+    elif state == "WAITING_INACTIVE_ACTION":
+        if msg == "1":
+            reply = "Por favor, digite el número de celular a validar:"
+            session.state = "WAITING_VALIDATION_PHONE"
+            ctx["invalid_attempts"] = 0
+        elif msg == "2":
+            reply = "¡Gracias! Hasta luego."
+            db.delete(session)
+        else:
+            reply, ctx = handle_invalid("Opción inválida.", "1. Validar número\n2. Salir")
+            
+    elif state == "WAITING_VALIDATION_PHONE":
+        val_phone = "".join(filter(str.isdigit, msg))
+        if len(val_phone) >= 10:
+            if val_phone.startswith("57") and len(val_phone) == 12:
+                val_phone = val_phone[2:]
+            
+            # Busco en base de datos calls
+            calls_sql = text("""
+                SELECT c.created_at, s.name as study_name
+                FROM calls c
+                LEFT JOIN studies s ON c.study_id = s.id
+                WHERE c.phone_number = :p OR c.phone_number = :np
+                ORDER BY c.created_at DESC
+                LIMIT 1
+            """)
+            record = db_users.execute(calls_sql, {"p": val_phone, "np": "57" + val_phone}).first()
+            if record:
+                date_str = record.created_at.strftime('%Y-%m-%d') if record.created_at else "desconocida"
+                study_name = record.study_name if record.study_name else "desconocido"
+                reply = f"⚠️ Ojo, esta persona está en la base *{study_name}* de fecha *{date_str}*.\n\n¿Quieres validar otro número?\n1. Sí\n2. No o cerrar"
+            else:
+                reply = "✅ El número no está en la base. Puede hacer encuesta.\n\n¿Quieres validar otro número?\n1. Sí\n2. No o cerrar"
+                
+            session.state = "WAITING_VALIDATION_MORE"
+            ctx["invalid_attempts"] = 0
+        else:
+            reply, ctx = handle_invalid("Por favor escribe un número válido de al menos 10 dígitos.", "")
+            
+    elif state == "WAITING_VALIDATION_MORE":
+        if msg in ["1", "si", "sí"]:
+            reply = "Por favor, digite el siguiente número de celular a validar:"
+            session.state = "WAITING_VALIDATION_PHONE"
+            ctx["invalid_attempts"] = 0
+        elif msg in ["2", "no", "cerrar", "salir"]:
+            reply = "¡Gracias por validar! Hasta luego."
+            session.state = "IDLE"
+            ctx = {}
+        else:
+            reply, interactive_data, ctx = handle_invalid("Responde 1 para validar otro o 2 para cerrar.", "1. Sí\n2. No o cerrar", ctx.get("interactive_fallback"))
 
     # --- NUEVAS RUTAS: RESPONDENTS & DESCONOCIDOS ---
     
@@ -621,10 +787,21 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             reply = "¡Perfecto! Gracias por participar en nuestro estudio. Esperamos contar contigo en futuras investigaciones. ¡Hasta luego!"
             db.delete(session)
         elif msg == "2":
-            reply = "Por favor, busca en tus chats de WhatsApp si tienes un mensaje nuestro de la cuenta de 'Súperincentivos' y sigue los pasos que están en ese chat.\n\nDespués de revisar, ¿pudiste resolverlo?\n1. Sí pude\n2. No pude"
+            reply = "Por favor, busca en tus chats de WhatsApp si tienes un mensaje nuestro de la cuenta de 'Súperincentivos' y sigue los pasos que están en ese chat.\n\nDespués de revisar, ¿pudiste resolverlo?"
             session.state = "WAITING_BONUS_SUPERINCENTIVOS"
+            interactive_data = {
+                "type": "button",
+                "body": {"text": reply},
+                "action": {
+                    "buttons": [
+                        {"type": "reply", "reply": {"id": "1", "title": "Sí pude"}},
+                        {"type": "reply", "reply": {"id": "2", "title": "No pude"}}
+                    ]
+                }
+            }
+            ctx["interactive_fallback"] = interactive_data
         else:
-            reply = "⚠️ Responde con 1 (Sí) o 2 (No)."
+            reply, interactive_data, ctx = handle_invalid("Opción inválida.", "1. Sí pude\n2. No pude", ctx.get("interactive_fallback"))
 
     elif state == "WAITING_BONUS_SUPERINCENTIVOS":
         if msg == "1":
@@ -643,17 +820,19 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             
             db.delete(session)
         else:
-            reply = "⚠️ Responde con 1 (Sí) o 2 (No)."
+            reply, interactive_data, ctx = handle_invalid("Opción inválida.", "1. Sí pude\n2. No pude", ctx.get("interactive_fallback"))
 
     elif state == "UNKNOWN_MENU":
         if msg == "1":
             reply = "Por favor, escribe el NÚMERO DE CELULAR (10 dígitos) del cual deseas consultar el estado de tu incentivo o bono:"
             session.state = "WAITING_BOND_PHONE"
+            ctx["invalid_attempts"] = 0
         elif msg == "2":
             reply = "¡Gracias por estar interesado en participar en un estudio de investigación de mercados! Por favor, regálame TU NÚMERO DE CELULAR (10 dígitos):"
             session.state = "WAITING_REFERRAL_PHONE"
+            ctx["invalid_attempts"] = 0
         else:
-            reply = "⚠️ Opción inválida.\n1. Ver estado de un bono/incentivo\n2. Referir a un amig@ para un estudio"
+            reply, interactive_data, ctx = handle_invalid("Opción inválida.", "1. Ver estado...\n2. Referir...", ctx.get("interactive_fallback"))
 
     elif state == "WAITING_BOND_PHONE":
         bond_phone = "".join(filter(str.isdigit, msg))
@@ -716,8 +895,23 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
 
     elif state == "WAITING_REFERRAL_NAME":
         ctx["ref_name"] = message_raw.strip()
-        reply = "Gracias. Selecciona tu Género:\n1. Masculino\n2. Femenino\n3. Otro\n4. Prefiero no decir"
+        reply = "Gracias. Selecciona tu Género:"
         session.state = "WAITING_REFERRAL_GENDER"
+        ctx["invalid_attempts"] = 0
+        interactive_data = {
+            "type": "list",
+            "body": {"text": reply},
+            "action": {
+                "button": "Ver Opciones",
+                "sections": [{"title": "Géneros", "rows": [
+                    {"id": "1", "title": "Masculino"},
+                    {"id": "2", "title": "Femenino"},
+                    {"id": "3", "title": "Otro"},
+                    {"id": "4", "title": "Prefiero no decir"}
+                ]}]
+            }
+        }
+        ctx["interactive_fallback"] = interactive_data
 
     elif state == "WAITING_REFERRAL_GENDER":
         mapping = {"1": "Masculino", "2": "Femenino", "3": "Otro", "4": "Prefiero no decir"}
@@ -725,16 +919,34 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             ctx["ref_gender"] = mapping[msg]
             reply = "¿Qué edad tienes? (Escribe el número, por ejemplo: 25)"
             session.state = "WAITING_REFERRAL_AGE"
+            ctx["invalid_attempts"] = 0
         else:
-            reply = "⚠️ Responde con el número de la opción (1 al 4):\n1. Masculino\n2. Femenino\n3. Otro\n4. Prefiero no decir"
+            reply, interactive_data, ctx = handle_invalid("Opción inválida.", "", ctx.get("interactive_fallback"))
 
     elif state == "WAITING_REFERRAL_AGE":
         if msg.isdigit() and 10 <= int(msg) <= 100:
             ctx["ref_age"] = int(msg)
-            reply = "¿En qué ciudad resides?\n1. Bogotá\n2. Barranquilla\n3. Cali\n4. Medellín\n5. Bucaramanga\n6. Otra"
+            reply = "¿En qué ciudad resides?"
             session.state = "WAITING_REFERRAL_CITY"
+            ctx["invalid_attempts"] = 0
+            interactive_data = {
+                "type": "list",
+                "body": {"text": reply},
+                "action": {
+                    "button": "Ver Opciones",
+                    "sections": [{"title": "Ciudades", "rows": [
+                        {"id": "1", "title": "Bogotá"},
+                        {"id": "2", "title": "Barranquilla"},
+                        {"id": "3", "title": "Cali"},
+                        {"id": "4", "title": "Medellín"},
+                        {"id": "5", "title": "Bucaramanga"},
+                        {"id": "6", "title": "Otra"}
+                    ]}]
+                }
+            }
+            ctx["interactive_fallback"] = interactive_data
         else:
-            reply = "⚠️ Escribe tu edad en números (ejemplo: 30)."
+            reply, interactive_data, ctx = handle_invalid("Por favor escribe tu edad en números validos.", "", ctx.get("interactive_fallback"))
 
     elif state == "WAITING_REFERRAL_CITY":
         mapping = {"1": "Bogotá", "2": "Barranquilla", "3": "Cali", "4": "Medellín", "5": "Bucaramanga"}
@@ -746,7 +958,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             reply = "¿En qué otra ciudad vives? (Escríbela brevemente):"
             session.state = "WAITING_REFERRAL_CITY_OTHER"
         else:
-            reply = "⚠️ Responde con el número de la opción (1 al 6)."
+            reply, interactive_data, ctx = handle_invalid("Opción inválida.", "", ctx.get("interactive_fallback"))
 
     elif state == "WAITING_REFERRAL_CITY_OTHER":
         ctx["ref_city"] = message_raw.strip()
@@ -760,8 +972,20 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
 
     elif state == "WAITING_REFERRAL_ADDRESS":
         ctx["ref_address"] = message_raw.strip()
-        reply = "De acuerdo con la ley de protección de datos de Colombia, ¿Autorizas voluntariamente que AZ Marketing conserve estos datos para ser contactado en futuros estudios?\n1. Sí, acepto\n2. No acepto"
+        reply = "De acuerdo con la ley de protección de datos de Colombia, ¿Autorizas voluntariamente que AZ Marketing conserve estos datos para ser contactado en futuros estudios?"
         session.state = "WAITING_REFERRAL_CONSENT"
+        ctx["invalid_attempts"] = 0
+        interactive_data = {
+            "type": "button",
+            "body": {"text": reply},
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": "1", "title": "Sí, acepto"}},
+                    {"type": "reply", "reply": {"id": "2", "title": "No acepto"}}
+                ]
+            }
+        }
+        ctx["interactive_fallback"] = interactive_data
 
     elif state == "WAITING_REFERRAL_CONSENT":
         if msg == "1" or msg == "si":
@@ -784,7 +1008,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             reply = "Entendido, no guardaremos tus datos. ¡Gracias por comunicarte con AZ Marketing, hasta luego!"
             db.delete(session)
         else:
-            reply = "⚠️ Por favor responde 1 para Aceptar, o 2 para Rechazar."
+            reply, interactive_data, ctx = handle_invalid("Opción inválida.", "1. Sí, acepto\n2. No acepto", ctx.get("interactive_fallback"))
 
     session.context_data = json.dumps(ctx)
     db.commit()
@@ -799,11 +1023,13 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
     db.add(log)
     db.commit()
     
-    # Send actual WhatsApp message if it's a real phone number
     if phone != "0000":
-        send_whatsapp_message(phone, reply)
+        if interactive_data:
+            send_whatsapp_interactive(phone, interactive_data)
+        else:
+            send_whatsapp_message(phone, reply)
     
-    return reply
+    return reply, interactive_data
 
 
 def build_study_report(db, study_code):
@@ -860,7 +1086,7 @@ def build_study_report(db, study_code):
         
     return f"\n{matrix_msg}\n{stats_msg}"
 
-def compute_next_bot_step(db, ctx, phone=""):
+def compute_next_bot_step_interactive(db, ctx, phone="") -> tuple[str, str, dict]:
 
     study_code = ctx["study_code"]
     selected_path = ctx["selected_path"]
@@ -882,7 +1108,7 @@ def compute_next_bot_step(db, ctx, phone=""):
     matched_paths = [p for p in valid_paths if p[:len(selected_path)] == selected_path]
     
     if not matched_paths:
-        return "⚠️ Error interno: Las opciones que elegiste no conectan con una cuota válida. Escribe 'cancelar' e intenta de nuevo.", "IDLE"
+        return "⚠️ Error interno: Las opciones que elegiste no conectan con una cuota válida. Escribe 'cancelar' e intenta de nuevo.", "IDLE", None
         
     depth = len(selected_path)
     
@@ -904,7 +1130,7 @@ def compute_next_bot_step(db, ctx, phone=""):
         report = build_study_report(db, study_code)
         
         base_reply = f"✅ ¡Guardado! Faltan {quota.target_count - quota.current_count} encuestas de esta cuota."
-        return f"{base_reply}{report}", "IDLE"
+        return f"{base_reply}{report}", "IDLE", None
         
     # Not a leaf, gather next layer options
     next_options = []
@@ -914,8 +1140,24 @@ def compute_next_bot_step(db, ctx, phone=""):
                 next_options.append(p[depth])
                 
     if not next_options:
-        return "⚠️ Error al conseguir la siguiente categoría.", "IDLE"
+        return "⚠️ Error al conseguir la siguiente categoría.", "IDLE", None
         
     ctx["current_options"] = next_options
-    opts = "\n".join([f"{i+1}. {o}" for i, o in enumerate(next_options)])
-    return f"Selecciona una opción:\n{opts}", "WAITING_CATEGORY"
+    reply = "Selecciona una opción:"
+    
+    rows = []
+    for i, o in enumerate(next_options):
+        # WA interactive lists have a limit of 24 chars for the title
+        rows.append({"id": str(i+1), "title": str(o)[:24]})
+        
+    # Let's chunk to 10 max if there are more than 10 options, although Meta limits per section are 10
+    interactive_data = {
+        "type": "list",
+        "body": {"text": reply},
+        "action": {
+            "button": "Seleccionar",
+            "sections": [{"title": "Categorías", "rows": rows[:10]}]
+        }
+    }
+    ctx["interactive_fallback"] = interactive_data
+    return reply, "WAITING_CATEGORY", interactive_data
