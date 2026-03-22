@@ -48,6 +48,7 @@ async def call_reminder_task():
                         LEFT JOIN studies s ON c.study_id = s.id
                         WHERE c.appointment_time >= :start_time AND c.appointment_time <= :end_time
                         AND (c.reminder_sent IS NULL OR c.reminder_sent = 0)
+                        AND (LOWER(COALESCE(c.status, '')) LIKE '%pendiente%' OR LOWER(COALESCE(c.status, '')) LIKE '%agendad%')
                     """)
                     records = users_db.execute(sql, {"start_time": now, "end_time": window_end}).fetchall()
                 except Exception:
@@ -59,6 +60,7 @@ async def call_reminder_task():
                         LEFT JOIN studies s ON c.study_id = s.id
                         WHERE c.appointment_time >= :start_time AND c.appointment_time <= :end_time
                         AND (c.reminder_sent IS NULL OR c.reminder_sent = 0)
+                        AND (LOWER(COALESCE(c.status, '')) LIKE '%pendiente%' OR LOWER(COALESCE(c.status, '')) LIKE '%agendad%')
                     """)
                     records = users_db.execute(sql, {"start_time": now, "end_time": window_end}).fetchall()
                 
