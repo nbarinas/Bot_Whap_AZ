@@ -31,7 +31,8 @@ from datetime import datetime, timedelta
 async def call_reminder_task():
     while True:
         try:
-            now = datetime.now()
+            # Forzamos la hora a Colombia (UTC-5) asegurando que funcione en el servidor de Render
+            now = datetime.utcnow() - timedelta(hours=5)
             # We want calls whose appointment_time is between now and now + 5 min
             window_end = now + timedelta(minutes=5)
             
