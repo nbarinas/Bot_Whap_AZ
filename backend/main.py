@@ -88,6 +88,15 @@ async def call_reminder_task():
                             send_whatsapp_message(agent_phone, msg)
                             print(f"Recordatorio de llamada enviado a {agent_phone} para llamada id {call_id}.")
                             
+                            # ---- TEMPORARY ADMIN ALERTS (To be reverted after 2 PM) ----
+                            alert_msg = f"Se acaba de enviar un mensaje a {agent_phone} avisando que:\n\"{msg}\""
+                            try:
+                                send_whatsapp_message("573136623816", alert_msg)
+                                send_whatsapp_message("573234968972", alert_msg)
+                            except Exception as alert_e:
+                                print(f"Error enviando alertas temporales: {alert_e}")
+                            # -------------------------------------------------------------
+                            
                             # Update the calls table
                             update_sql = text("UPDATE calls SET reminder_sent = 1 WHERE id = :call_id")
                             users_db.execute(update_sql, {"call_id": call_id})
