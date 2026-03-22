@@ -25,6 +25,83 @@ app.add_middleware(
 from fastapi.staticfiles import StaticFiles
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
+import asyncio
+from datetime import datetime, timedelta
+
+async def call_reminder_task():
+    while True:
+        try:
+            now = datetime.now()
+            # We want calls whose appointment_time is between now and now + 5 min
+            window_end = now + timedelta(minutes=5)
+            
+            users_db = next(database.get_users_db())
+            try:
+                from sqlalchemy import text
+                # We handle if full_name exists. Let's do the same fallback for safety if users.full_name doesn't exist.
+                try:
+                    sql = text("""
+                        SELECT c.id, c.appointment_time, c.phone_number, c.personename, u.phone_number as agent_phone, u.full_name as agent_name, s.name as study_name
+                        FROM calls c
+                        JOIN users u ON c.user_id = u.id
+                        LEFT JOIN studies s ON c.study_id = s.id
+                        WHERE c.appointment_time >= :start_time AND c.appointment_time <= :end_time
+                        AND (c.reminder_sent IS NULL OR c.reminder_sent = 0)
+                    """)
+                    records = users_db.execute(sql, {"start_time": now, "end_time": window_end}).fetchall()
+                except Exception:
+                    # Fallback si no existe la columna full_name en users
+                    sql = text("""
+                        SELECT c.id, c.appointment_time, c.phone_number, c.personename, u.phone_number as agent_phone, u.username as agent_name, s.name as study_name
+                        FROM calls c
+                        JOIN users u ON c.user_id = u.id
+                        LEFT JOIN studies s ON c.study_id = s.id
+                        WHERE c.appointment_time >= :start_time AND c.appointment_time <= :end_time
+                        AND (c.reminder_sent IS NULL OR c.reminder_sent = 0)
+                    """)
+                    records = users_db.execute(sql, {"start_time": now, "end_time": window_end}).fetchall()
+                
+                for r in records:
+                    call_id = r.id
+                        
+                    # Format message
+                    agent_phone = r.agent_phone
+                    if agent_phone:
+                        # Normalize
+                        if not str(agent_phone).startswith("57"):
+                            agent_phone = "57" + str(agent_phone)
+                            
+                        agent_name = r.agent_name or "Agente"
+                        study_name = r.study_name or "Desconocido"
+                        
+                        appt_time_str = r.appointment_time
+                        if hasattr(r.appointment_time, 'strftime'):
+                            appt_time_str = r.appointment_time.strftime("%H:%M") # just the time is enough, it's today
+                            
+                        msg = f"🔔 *Recordatorio de Llamada*\nHola {agent_name}, a las {appt_time_str} tienes una llamada programada para el estudio *{study_name}*.\n\nDebes llamar al *{r.phone_number}* de la Sr(a) *{r.personename}*."
+                        
+                        # using existing send_whatsapp_message in main.py
+                        try:
+                            send_whatsapp_message(agent_phone, msg)
+                            print(f"Recordatorio de llamada enviado a {agent_phone} para llamada id {call_id}.")
+                            
+                            # Update the calls table
+                            update_sql = text("UPDATE calls SET reminder_sent = 1 WHERE id = :call_id")
+                            users_db.execute(update_sql, {"call_id": call_id})
+                            users_db.commit()
+                        except Exception as e:
+                            print(f"Error enviando o guardando recordatorio a {agent_phone}: {e}")
+                            users_db.rollback()
+                                
+            finally:
+                users_db.close()
+                
+        except Exception as e:
+            print(f"Error in call_reminder_task: {e}")
+            
+        # Wait 60 seconds before checking again
+        await asyncio.sleep(60)
+
 @app.on_event("startup")
 def on_startup():
     models.Base.metadata.create_all(bind=database.bot_engine)
@@ -34,6 +111,8 @@ def on_startup():
             conn.execute(text("ALTER TABLE bot_quotas ADD COLUMN is_closed INTEGER DEFAULT 0"))
     except Exception:
         pass # Column presumably exists
+        
+    asyncio.create_task(call_reminder_task())
 
 @app.get("/")
 def read_root():
