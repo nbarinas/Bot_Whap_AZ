@@ -41,7 +41,7 @@ async def call_reminder_task():
                 # We handle if full_name exists. Let's do the same fallback for safety if users.full_name doesn't exist.
                 try:
                     sql = text("""
-                        SELECT c.id, c.appointment_time, c.phone_number, c.personename, u.phone_number as agent_phone, u.full_name as agent_name, s.name as study_name
+                        SELECT c.id, c.appointment_time, c.phone_number, c.person_name, u.phone_number as agent_phone, u.full_name as agent_name, s.name as study_name
                         FROM calls c
                         JOIN users u ON c.user_id = u.id
                         LEFT JOIN studies s ON c.study_id = s.id
@@ -52,7 +52,7 @@ async def call_reminder_task():
                 except Exception:
                     # Fallback si no existe la columna full_name en users
                     sql = text("""
-                        SELECT c.id, c.appointment_time, c.phone_number, c.personename, u.phone_number as agent_phone, u.username as agent_name, s.name as study_name
+                        SELECT c.id, c.appointment_time, c.phone_number, c.person_name, u.phone_number as agent_phone, u.username as agent_name, s.name as study_name
                         FROM calls c
                         JOIN users u ON c.user_id = u.id
                         LEFT JOIN studies s ON c.study_id = s.id
@@ -78,7 +78,7 @@ async def call_reminder_task():
                         if hasattr(r.appointment_time, 'strftime'):
                             appt_time_str = r.appointment_time.strftime("%H:%M") # just the time is enough, it's today
                             
-                        msg = f"🔔 *Recordatorio de Llamada*\nHola {agent_name}, a las {appt_time_str} tienes una llamada programada para el estudio *{study_name}*.\n\nDebes llamar al *{r.phone_number}* de la Sr(a) *{r.personename}*."
+                        msg = f"🔔 *Recordatorio de Llamada*\nHola {agent_name}, a las {appt_time_str} tienes una llamada programada para el estudio *{study_name}*.\n\nDebes llamar al *{r.phone_number}* de la Sr(a) *{r.person_name}*."
                         
                         # using existing send_whatsapp_message in main.py
                         try:
