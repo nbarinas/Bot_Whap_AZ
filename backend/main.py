@@ -81,7 +81,7 @@ async def call_reminder_task():
                         if hasattr(r.appointment_time, 'strftime'):
                             appt_time_str = r.appointment_time.strftime("%H:%M") # just the time is enough, it's today
                             
-                        msg = f"🔔 *Recordatorio de Llamada*\nHola {agent_name}, a las {appt_time_str} tienes una llamada programada para el estudio *{study_name}*.\n\nDebes llamar al *{r.phone_number}* de la Sr(a) *{r.person_name}*."
+                        msg = f"🔔 *Recordatorio de Llamada*\nHola {agent_name}, soy un bot automatizado del CRM de AZ Marketing. A las {appt_time_str} tienes una llamada programada para el estudio *{study_name}*.\n\nDebes llamar al *{r.phone_number}* de la Sr(a) *{r.person_name}*."
                         
                         # using existing send_whatsapp_message in main.py
                         try:
