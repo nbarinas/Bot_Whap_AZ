@@ -128,6 +128,10 @@ def on_startup():
         pass # Column presumably exists
         
     asyncio.create_task(call_reminder_task())
+    try:
+        send_whatsapp_message("573136623816", "🚀 *Prueba de Sistema*: El bot de recordatorios se ha iniciado correctamente con el nuevo seguimiento de estados.")
+    except Exception:
+        pass
 
 @app.get("/")
 def read_root():
