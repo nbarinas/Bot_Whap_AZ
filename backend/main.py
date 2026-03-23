@@ -40,17 +40,19 @@ async def call_reminder_task():
             try:
                 from sqlalchemy import text
                 # We handle if full_name exists. Let's do the same fallback for safety if users.full_name doesn't exist.
+                # UPDATED: More robust window - check any pending for today up to now + 5 min
                 try:
                     sql = text("""
                         SELECT c.id, c.appointment_time, c.phone_number, c.person_name, u.phone_number as agent_phone, u.full_name as agent_name, s.name as study_name
                         FROM calls c
                         JOIN users u ON c.user_id = u.id
                         LEFT JOIN studies s ON c.study_id = s.id
-                        WHERE c.appointment_time >= :start_time AND c.appointment_time <= :end_time
+                        WHERE c.appointment_time <= :end_time
+                        AND date(c.appointment_time) = date(:now)
                         AND (c.reminder_sent IS NULL OR c.reminder_sent = 0)
                         AND (LOWER(COALESCE(c.status, '')) LIKE '%pending%' OR LOWER(COALESCE(c.status, '')) LIKE '%schedul%')
                     """)
-                    records = users_db.execute(sql, {"start_time": now, "end_time": window_end}).fetchall()
+                    records = users_db.execute(sql, {"now": now, "end_time": window_end}).fetchall()
                 except Exception:
                     # Fallback si no existe la columna full_name en users
                     sql = text("""
@@ -58,11 +60,12 @@ async def call_reminder_task():
                         FROM calls c
                         JOIN users u ON c.user_id = u.id
                         LEFT JOIN studies s ON c.study_id = s.id
-                        WHERE c.appointment_time >= :start_time AND c.appointment_time <= :end_time
+                        WHERE c.appointment_time <= :end_time
+                        AND date(c.appointment_time) = date(:now)
                         AND (c.reminder_sent IS NULL OR c.reminder_sent = 0)
                         AND (LOWER(COALESCE(c.status, '')) LIKE '%pending%' OR LOWER(COALESCE(c.status, '')) LIKE '%schedul%')
                     """)
-                    records = users_db.execute(sql, {"start_time": now, "end_time": window_end}).fetchall()
+                    records = users_db.execute(sql, {"now": now, "end_time": window_end}).fetchall()
                 
                 for r in records:
                     call_id = r.id
@@ -338,10 +341,13 @@ def send_whatsapp_message(to_phone: str, message_text: str):
     }
     try:
         response = requests.post(url, headers=headers, data=json.dumps(data))
+        resp_json = response.json() if response.status_code == 200 else {}
+        msg_id = resp_json.get("messages", [{}])[0].get("id", "unknown")
+        
         if response.status_code != 200:
             print(f"META ERROR RESPONSE: {response.text}")
         response.raise_for_status()
-        print(f"WhatsApp message successfully sent to {to_phone}")
+        print(f"WhatsApp message successfully sent to {to_phone} (ID: {msg_id})")
     except Exception as e:
         print(f"Error sending WhatsApp message to {to_phone}: {str(e)}")
 
@@ -459,6 +465,16 @@ async def receive_whatsapp_webhook(request: Request, db: Session = Depends(datab
                                 print(f"Received WhatsApp MSG from {phone}: {text_msg}")
                                 # Process it using our core logic
                                 process_bot_message(phone, text_msg, db, db_users)
+                                
+                    # Tracking Delivery Statuses
+                    if "statuses" in value:
+                        for status in value["statuses"]:
+                            recipient = status.get("recipient_id")
+                            status_type = status.get("status") # sent, delivered, read, failed
+                            msg_id = status.get("id")
+                            print(f"STATUS UPDATE: Message {msg_id} to {recipient} is now {status_type}")
+                            if "errors" in status:
+                                print(f"META DELIVERY ERROR for {recipient}: {status['errors']}")
                                 
             return {"status": "ok"}
         except Exception as e:
