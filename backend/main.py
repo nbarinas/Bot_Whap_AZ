@@ -384,7 +384,7 @@ def send_whatsapp_template(to_phone: str, template_name: str, components: list):
         "template": {
             "name": template_name,
             "language": {
-                "code": "es_CO"
+                "code": "es"
             },
             "components": components
         }
