@@ -87,46 +87,36 @@ async def call_reminder_task():
                         msg = f"🔔 *Recordatorio de Llamada*\nHola {agent_name}, soy un bot automatizado del CRM de AZ Marketing. A las {appt_time_str} tienes una llamada programada para el estudio *{study_name}*.\n\nDebes llamar al *{r.phone_number}* de la Sr(a) *{r.person_name}*."
                         
                         # using existing send_whatsapp_message in main.py
+                        # ---- GUARANTEED DELIVERY VIA TEMPLATE ----
+                        # Since these are outbound reminders, we use the Template to bypass the 24h window
                         try:
-                            send_whatsapp_message(agent_phone, msg)
-                            print(f"Recordatorio de llamada enviado a {agent_phone} para llamada id {call_id}.")
+                            template_components = [
+                                {
+                                    "type": "body",
+                                    "parameters": [
+                                        {"type": "text", "text": agent_name},
+                                        {"type": "text", "text": appt_time_str},
+                                        {"type": "text", "text": study_name},
+                                        {"type": "text", "text": r.phone_number},
+                                        {"type": "text", "text": r.person_name}
+                                    ]
+                                }
+                            ]
+                            send_whatsapp_template(agent_phone, "recordatorio_de_llamada", template_components)
+                            print(f"Recordatorio vía PLANTILLA enviado a {agent_phone} para llamada id {call_id}.")
                             
-                            # ---- TEMPORARY ADMIN ALERTS (To be reverted after 2 PM) ----
-                            alert_msg = f"Se acaba de enviar un mensaje a {agent_phone} avisando que:\n\"{msg}\""
+                            # ---- TEMPORARY ADMIN ALERTS (Text is fine for admins who are active) ----
+                            alert_msg = f"🔔 *Alerta Admin*: Enviamos recordatorio a {agent_phone} para {agent_name} (Llamada {call_id})."
                             try:
                                 send_whatsapp_message("573136623816", alert_msg)
                                 send_whatsapp_message("573234968972", alert_msg)
-                            except Exception as alert_e:
-                                print(f"Error enviando alertas temporales: {alert_e}")
+                            except Exception: pass
                             # -------------------------------------------------------------
                             
                         except Exception as e:
-                            # FALLBACK: If 24-hour window error (131047), try sending as template
-                            if "131047" in str(e):
-                                print(f"24-hour window error for {agent_phone}. Attempting fallback with template...")
-                                try:
-                                    template_components = [
-                                        {
-                                            "type": "body",
-                                            "parameters": [
-                                                {"type": "text", "text": agent_name},
-                                                {"type": "text", "text": appt_time_str},
-                                                {"type": "text", "text": study_name},
-                                                {"type": "text", "text": r.phone_number},
-                                                {"type": "text", "text": r.person_name}
-                                            ]
-                                        }
-                                    ]
-                                    send_whatsapp_template(agent_phone, "recordatorio_de_llamada", template_components)
-                                    print(f"Recordatorio vía PLANTILLA enviado a {agent_phone} para llamada id {call_id}.")
-                                except Exception as template_e:
-                                    print(f"Error enviando PLANTILLA a {agent_phone}: {template_e}")
-                                    users_db.rollback()
-                                    continue # Skip updating to reminder_sent=1
-                            else:
-                                print(f"Error enviando o guardando recordatorio a {agent_phone}: {e}")
-                                users_db.rollback()
-                                continue # Skip updating to reminder_sent=1
+                            print(f"Error fatal enviando recordatorio a {agent_phone}: {e}")
+                            users_db.rollback()
+                            continue # Skip updating to reminder_sent=1
 
                         # Update the calls table
                         try:
