@@ -128,6 +128,32 @@ def on_startup():
         pass # Column presumably exists
         
     asyncio.create_task(call_reminder_task())
+    
+    # ---- PRUEBA AISLADA SOLO PARA TI (Usando Cuenta Real) ----
+    try:
+        REAL_PHONE_ID = "1007467589118202"
+        test_components = [
+            {"type": "body", "parameters": [
+                {"type": "text", "text": "Cristian (Prueba Real)"},
+                {"type": "text", "text": "2:30 PM"},
+                {"type": "text", "text": "Estudio de Verificación"},
+                {"type": "text", "text": "3136623816"},
+                {"type": "text", "text": "Usuario de Prueba"}
+            ]}
+        ]
+        # Creamos un mini-envío manual para no tocar la función global
+        url = f"https://graph.facebook.com/v22.0/{REAL_PHONE_ID}/messages"
+        headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+        data = {
+            "messaging_product": "whatsapp", "to": "573136623816", "type": "template",
+            "template": {"name": "recordatorio_de_llamada", "language": {"code": "es_CO"}, "components": test_components}
+        }
+        import requests
+        resp = requests.post(url, headers=headers, json=data)
+        print(f"RESULTADO PRUEBA REAL: {resp.status_code} - {resp.text}")
+    except Exception as e:
+        print(f"Error en prueba aislada: {e}")
+    # ----------------------------------------------------------
 
 @app.get("/")
 def read_root():
