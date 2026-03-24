@@ -100,12 +100,41 @@ async def call_reminder_task():
                                 print(f"Error enviando alertas temporales: {alert_e}")
                             # -------------------------------------------------------------
                             
-                            # Update the calls table
+                        except Exception as e:
+                            # FALLBACK: If 24-hour window error (131047), try sending as template
+                            if "131047" in str(e):
+                                print(f"24-hour window error for {agent_phone}. Attempting fallback with template...")
+                                try:
+                                    template_components = [
+                                        {
+                                            "type": "body",
+                                            "parameters": [
+                                                {"type": "text", "text": agent_name},
+                                                {"type": "text", "text": appt_time_str},
+                                                {"type": "text", "text": study_name},
+                                                {"type": "text", "text": r.phone_number},
+                                                {"type": "text", "text": r.person_name}
+                                            ]
+                                        }
+                                    ]
+                                    send_whatsapp_template(agent_phone, "recordatorio_de_llamada", template_components)
+                                    print(f"Recordatorio vía PLANTILLA enviado a {agent_phone} para llamada id {call_id}.")
+                                except Exception as template_e:
+                                    print(f"Error enviando PLANTILLA a {agent_phone}: {template_e}")
+                                    users_db.rollback()
+                                    continue # Skip updating to reminder_sent=1
+                            else:
+                                print(f"Error enviando o guardando recordatorio a {agent_phone}: {e}")
+                                users_db.rollback()
+                                continue # Skip updating to reminder_sent=1
+
+                        # Update the calls table
+                        try:
                             update_sql = text("UPDATE calls SET reminder_sent = 1 WHERE id = :call_id")
                             users_db.execute(update_sql, {"call_id": call_id})
                             users_db.commit()
-                        except Exception as e:
-                            print(f"Error enviando o guardando recordatorio a {agent_phone}: {e}")
+                        except Exception as update_e:
+                            print(f"Error actualizando reminder_sent en DB: {update_e}")
                             users_db.rollback()
                                 
             finally:
@@ -349,7 +378,39 @@ def send_whatsapp_message(to_phone: str, message_text: str):
         response.raise_for_status()
         print(f"WhatsApp message successfully sent to {to_phone} (ID: {msg_id})")
     except Exception as e:
-        print(f"Error sending WhatsApp message to {to_phone}: {str(e)}")
+        # Re-raise to allow caller to handle specific error codes
+        raise e
+
+def send_whatsapp_template(to_phone: str, template_name: str, components: list):
+    url = f"https://graph.facebook.com/v22.0/{WHATSAPP_PHONE_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "messaging_product": "whatsapp",
+        "to": to_phone,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {
+                "code": "es_CO"
+            },
+            "components": components
+        }
+    }
+    try:
+        response = requests.post(url, headers=headers, data=json.dumps(data))
+        resp_json = response.json() if response.status_code == 200 else {}
+        msg_id = resp_json.get("messages", [{}])[0].get("id", "unknown")
+        
+        if response.status_code != 200:
+            print(f"META TEMPLATE ERROR RESPONSE: {response.text}")
+        response.raise_for_status()
+        print(f"WhatsApp template '{template_name}' successfully sent to {to_phone} (ID: {msg_id})")
+    except Exception as e:
+        print(f"Error sending WhatsApp template to {to_phone}: {str(e)}")
+        raise e
 
 def send_whatsapp_media(to_phone: str, media_type: str, media_id: str, caption: str = None):
     """
