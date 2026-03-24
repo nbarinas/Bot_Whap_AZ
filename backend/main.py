@@ -147,6 +147,19 @@ def on_startup():
         pass # Column presumably exists
         
     asyncio.create_task(call_reminder_task())
+    try:
+        test_components = [
+            {"type": "body", "parameters": [
+                {"type": "text", "text": "Cristian (Prueba)"},
+                {"type": "text", "text": "11:30 AM"},
+                {"type": "text", "text": "Estudio de Prueba"},
+                {"type": "text", "text": "3136623816"},
+                {"type": "text", "text": "Usuario de Prueba"}
+            ]}
+        ]
+        send_whatsapp_template("573136623816", "recordatorio_de_llamada", test_components)
+    except Exception as e:
+        print(f"Error en prueba de plantilla: {e}")
 
 @app.get("/")
 def read_root():
