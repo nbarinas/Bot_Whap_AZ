@@ -7,7 +7,8 @@ from typing import Optional
 import os
 from fastapi.security import OAuth2PasswordRequestForm
 
-from . import models, database, auth
+from . import models, database, auth, media_handler
+import re
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.join(os.path.dirname(BASE_DIR), "frontend")
@@ -465,6 +466,11 @@ async def receive_whatsapp_webhook(request: Request, db: Session = Depends(datab
                                 print(f"Received WhatsApp MSG from {phone}: {text_msg}")
                                 # Process it using our core logic
                                 process_bot_message(phone, text_msg, db, db_users)
+                            elif msg_data.get("type") == "image":
+                                image_data = msg_data.get("image", {})
+                                media_id = image_data.get("id")
+                                print(f"Received WhatsApp IMAGE from {phone}: {media_id}")
+                                process_bot_message(phone, "IMAGE_RECEIVED", db, db_users, media_id=media_id)
                                 
                     # Tracking Delivery Statuses
                     if "statuses" in value:
@@ -485,6 +491,39 @@ async def receive_whatsapp_webhook(request: Request, db: Session = Depends(datab
         raise HTTPException(status_code=404)
 
 
+def finalize_census_flow(db, phone, ctx):
+    """
+    Logs data to Sheets and resets the session.
+    """
+    censo_num = ctx.get("census_number")
+    name = ctx.get("person_name")
+    neighborhood = ctx.get("neighborhood")
+    address = ctx.get("address")
+    photos = ctx.get("photos", [])
+    
+    # Format for Sheets: [Censo, Nombre, Barrio, Dirección, Fecha, Hora, Link1, Link2]
+    now = datetime.now()
+    date_str = now.strftime("%Y-%m-%d")
+    time_str = now.strftime("%H:%M:%S")
+    
+    photo_links = [f"https://drive.google.com/open?id={pid}" for pid in photos]
+    while len(photo_links) < 2:
+        photo_links.append("")
+        
+    row = [censo_num, name, neighborhood, address, date_str, time_str] + photo_links
+    
+    # Log to Sheets
+    media_handler.log_to_sheets(row)
+    
+    # Clean up session
+    session = db.query(models.BotSession).filter(models.BotSession.phone_number == phone).first()
+    if session:
+        db.delete(session)
+        db.commit()
+        
+    return f"✅ ¡Entrega del censo *{censo_num}* finalizada con éxito!\n\nSe han guardado {len(photos)} fotos en Google Drive y se ha registrado en la hoja de cálculo."
+
+
 @app.post("/api/bot/webhook-simulate")
 def simulate_whatsapp_webhook(req: WebhookSimulateRequest, db: Session = Depends(database.get_db), db_users: Session = Depends(database.get_users_db)):
     """
@@ -494,7 +533,7 @@ def simulate_whatsapp_webhook(req: WebhookSimulateRequest, db: Session = Depends
     return {"reply": reply, "interactive": interactive}
 
 
-def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users: Session) -> tuple[str, dict]:
+def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users: Session, media_id: str = None) -> tuple[str, dict]:
     """
     Core bot logic extracted from the simulator so both endpoints can share it.
     Returns (reply_text, interactive_data_dict)
@@ -543,6 +582,48 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         else:
             user_type = "UNKNOWN"
             
+    # --- DETECCION DE CENSO (TRIGGER) ---
+    if user_type == "AGENT" and not media_id:
+        censo_match = re.search(r"censo\s*(\d+)", msg)
+        if censo_match:
+            censo_num = censo_match.group(1)
+            # Buscar en la base de datos
+            censo_sql = text("SELECT id, person_name, neighborhood, address FROM calls WHERE census = :c LIMIT 1")
+            censo_rec = db_users.execute(censo_sql, {"c": censo_num}).first()
+            
+            if censo_rec:
+                # Iniciar flujo de censo
+                session = db.query(models.BotSession).filter(models.BotSession.phone_number == phone).first()
+                if not session:
+                    session = models.BotSession(phone_number=phone)
+                    db.add(session)
+                
+                session.state = "WAITING_CENSO_CONFIRMATION"
+                ctx_data = {
+                    "census_number": censo_num,
+                    "call_id": censo_rec.id,
+                    "person_name": censo_rec.person_name,
+                    "neighborhood": censo_rec.neighborhood,
+                    "address": censo_rec.address,
+                    "photos": []
+                }
+                session.context_data = json.dumps(ctx_data)
+                db.commit()
+                
+                reply = f"✅ Censo {censo_num} encontrado.\n\n👤 *Nombre:* {censo_rec.person_name}\n🏠 *Barrio:* {censo_rec.neighborhood}\n📍 *Dirección:* {censo_rec.address}\n\n¿Es la información correcta?"
+                interactive_data = {
+                    "type": "button",
+                    "body": {"text": reply},
+                    "action": {
+                        "buttons": [
+                            {"type": "reply", "reply": {"id": "1", "title": "Sí, es correcto"}},
+                            {"type": "reply", "reply": {"id": "2", "title": "No, volver a digitar"}}
+                        ]
+                    }
+                }
+                return reply, interactive_data
+            else:
+                return f"❌ No se encontró el censo *{censo_num}* en la base de datos. Por favor verifica el número.", None
 
     
     from datetime import datetime, timedelta, timezone
@@ -585,7 +666,11 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             session.state = "IDLE"
             return "🚫 Demasiados intentos inválidos. La sesión se ha reiniciado.\n👋 Escribe 'Hola' para empezar de nuevo.", None, {}
         ctx["invalid_attempts"] = attempts
-        return f"⚠️ {err_msg}\n\nOpciones disponibles:\n{options_text}", interactive_fallback, ctx
+        # Cleanly combine error message and options
+        full_reply = f"⚠️ {err_msg}"
+        if options_text:
+            full_reply += f"\n\nOpciones disponibles:\n{options_text}"
+        return full_reply, interactive_fallback, ctx
 
     if state == "IDLE":
         if user_type == "INACTIVE_AGENT":
@@ -829,8 +914,14 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             reply, ctx = handle_invalid("Opción inválida.", "1. Validar número\n2. Salir")
             
     elif state == "WAITING_VALIDATION_PHONE":
+        # Clean number (removing spaces, dashes, etc.)
         val_phone = "".join(filter(str.isdigit, msg))
-        if len(val_phone) >= 10:
+        
+        if not val_phone:
+            reply, interactive_data, ctx = handle_invalid("No detecté ningún número en tu mensaje. Por favor, escribe el celular de 10 dígitos (ej: 3136623816).", "", ctx.get("interactive_fallback"))
+        elif len(val_phone) < 10:
+            reply, interactive_data, ctx = handle_invalid(f"El número detectado '{val_phone}' es muy corto. Debe tener al menos 10 dígitos.", "", ctx.get("interactive_fallback"))
+        elif len(val_phone) >= 10:
             if val_phone.startswith("57") and len(val_phone) == 12:
                 val_phone = val_phone[2:]
             
@@ -850,7 +941,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 latest_study = latest.study_name if latest.study_name else "desconocido"
                 
                 if total_count == 1:
-                    reply = f"⚠️ Ojo, esta persona participo la ultima vez en la base *{latest_study}* de fecha *{latest_date_str}*.\n\nEn total ha participado 1 vez.\n\n¿Quieres validar otro número?"
+                    reply = f"⚠️ Ojo, esta persona participó la última vez en la base *{latest_study}* de fecha *{latest_date_str}*.\n\nEn total ha participado 1 vez.\n\n¿Quieres validar otro número?"
                 else:
                     historial = []
                     # Mostramos hasta las últimas 5 adicionales
@@ -863,9 +954,9 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                         historial.append(f"... y {total_count - 6} más.")
                         
                     historial_str = "\n".join(historial)
-                    reply = f"⚠️ Ojo, esta persona participo la ultima vez en la base *{latest_study}* de fecha *{latest_date_str}*.\n\nEn total ha participado *{total_count} veces*. Historial reciente:\n{historial_str}\n\n¿Quieres validar otro número?"
+                    reply = f"⚠️ Ojo, esta persona participó la última vez en la base *{latest_study}* de fecha *{latest_date_str}*.\n\nEn total ha participado *{total_count} veces*. Historial reciente:\n{historial_str}\n\n¿Quieres validar otro número?"
             else:
-                reply = "✅ El número no está en la base. Puede hacer encuesta.\n\n¿Quieres validar otro número?"
+                reply = f"✅ El número *{val_phone}* no está en la base. Puede hacer encuesta.\n\n¿Quieres validar otro número?"
                 
             session.state = "WAITING_VALIDATION_MORE"
             ctx["invalid_attempts"] = 0
@@ -880,8 +971,6 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 }
             }
             ctx["interactive_fallback"] = interactive_data
-        else:
-            reply, interactive_data, ctx = handle_invalid("Por favor escribe un número válido de al menos 10 dígitos.", "", ctx.get("interactive_fallback"))
             
     elif state == "WAITING_VALIDATION_MORE":
         if msg in ["1", "si", "sí"]:
@@ -1057,6 +1146,84 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         else:
             reply, interactive_data, ctx = handle_invalid("Opción inválida.", "", ctx.get("interactive_fallback"))
 
+    elif state == "WAITING_REFERRAL_NEIGHBORHOOD":
+        ctx["ref_neighborhood"] = message_raw.strip()
+        reply = "¿En qué barrio vives?"
+        session.state = "WAITING_REFERRAL_NEIGHBORHOOD"
+
+    # --- NUEVOS ESTADOS: FLUJO DE CENSO ---
+    
+    elif state == "WAITING_CENSO_CONFIRMATION":
+        if msg in ["1", "si", "sí", "sí, es correcto"]:
+            session.state = "WAITING_PHOTO_1"
+            reply = "¡Perfecto! Por favor, envíame la *primera foto* de la entrega."
+            db.commit()
+        elif msg in ["2", "no", "volver a digitar"]:
+            session.state = "IDLE"
+            reply = "Entendido. Por favor, escribe de nuevo el censo (ej: censo 1015)."
+            ctx = {}
+            session.context_data = "{}"
+            db.commit()
+        else:
+            reply, interactive_data, ctx = handle_invalid("Opción inválida.", "1. Sí\n2. No", ctx.get("interactive_fallback"))
+
+    elif state == "WAITING_PHOTO_1":
+        if media_id:
+            censo_num = ctx.get("census_number", "unknown")
+            filename = f"Censo_{censo_num}_1.jpg"
+            temp_path = os.path.join(os.path.dirname(__file__), f"temp_{phone}_1.jpg")
+            
+            if media_handler.download_whatsapp_media(media_id, temp_path):
+                drive_id = media_handler.upload_to_drive(temp_path, filename)
+                if drive_id:
+                    ctx["photos"].append(drive_id)
+                    session.context_data = json.dumps(ctx)
+                    session.state = "WAITING_PHOTO_2_OR_FINISH"
+                    reply = "✅ Primera foto recibida y guardada en Drive.\n\n¿Deseas enviar una *segunda foto* o ya terminaste?"
+                    interactive_data = {
+                        "type": "button",
+                        "body": {"text": reply},
+                        "action": {
+                            "buttons": [
+                                {"type": "reply", "reply": {"id": "1", "title": "Enviar otra"}},
+                                {"type": "reply", "reply": {"id": "2", "title": "Terminar"}}
+                            ]
+                        }
+                    }
+                    ctx["interactive_fallback"] = interactive_data
+                    db.commit()
+                    if os.path.exists(temp_path): os.remove(temp_path)
+                else:
+                    reply = "⚠️ Error al subir a Drive. Intenta de nuevo."
+            else:
+                reply = "⚠️ Error al descargar imagen. Reintenta."
+        else:
+            reply = "📷 Por favor, envía la foto de la entrega."
+
+    elif state == "WAITING_PHOTO_2_OR_FINISH":
+        if media_id:
+            censo_num = ctx.get("census_number", "unknown")
+            filename = f"Censo_{censo_num}_2.jpg"
+            temp_path = os.path.join(os.path.dirname(__file__), f"temp_{phone}_2.jpg")
+            
+            if media_handler.download_whatsapp_media(media_id, temp_path):
+                drive_id = media_handler.upload_to_drive(temp_path, filename)
+                if drive_id:
+                    ctx["photos"].append(drive_id)
+                    # Terminar flujo
+                    finish_msg = finalize_census_flow(db, phone, ctx)
+                    if os.path.exists(temp_path): os.remove(temp_path)
+                    return finish_msg, None
+                else:
+                    reply = "⚠️ Error al subir a Drive. Intenta de nuevo."
+            else:
+                reply = "⚠️ Error al descargar imagen. Reintenta."
+        elif msg in ["2", "terminar"]:
+            finish_msg = finalize_census_flow(db, phone, ctx)
+            return finish_msg, None
+        else:
+            reply, interactive_data, ctx = handle_invalid("Opción inválida.", "1. Enviar otra\n2. Terminar", ctx.get("interactive_fallback"))
+
     elif state == "WAITING_REFERRAL_AGE":
         if msg.isdigit() and 10 <= int(msg) <= 100:
             ctx["ref_age"] = int(msg)
@@ -1159,6 +1326,11 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
     
     if phone != "0000":
         if interactive_data:
+            # Bug fix: If there is a reply starting with an emoji (warning/error), 
+            # send it as a separate text message first so it's not hidden by the interactive menu.
+            if reply and (reply.startswith("⚠️") or reply.startswith("🚫")):
+                send_whatsapp_message(phone, reply)
+            
             send_whatsapp_interactive(phone, interactive_data)
         else:
             send_whatsapp_message(phone, reply)
