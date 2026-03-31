@@ -471,6 +471,12 @@ async def receive_whatsapp_webhook(request: Request, db: Session = Depends(datab
                                 media_id = image_data.get("id")
                                 print(f"Received WhatsApp IMAGE from {phone}: {media_id}")
                                 process_bot_message(phone, "IMAGE_RECEIVED", db, db_users, media_id=media_id)
+                            elif msg_data.get("type") == "audio":
+                                print(f"Received WhatsApp AUDIO from {phone}")
+                                process_bot_message(phone, "AUDIO_RECEIVED", db, db_users)
+                            elif msg_data.get("type") == "video":
+                                print(f"Received WhatsApp VIDEO from {phone}")
+                                process_bot_message(phone, "VIDEO_RECEIVED", db, db_users)
                                 
                     # Tracking Delivery Statuses
                     if "statuses" in value:
@@ -660,6 +666,15 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
     reply = ""
     interactive_data = None
 
+    # Global media handlers (Skip state logic if audio/video is received)
+    is_media_unsupported = False
+    if msg == "audio_received":
+        reply = "⚠️ Por el momento no puedo escuchar mensajes de voz. Por favor, escribe tu solicitud para poder ayudarte."
+        is_media_unsupported = True
+    elif msg == "video_received":
+        reply = "⚠️ Por el momento no puedo procesar videos. Por favor, escribe tu mensaje o envía una foto cuando sea solicitada."
+        is_media_unsupported = True
+
     def handle_invalid(err_msg, options_text, interactive_fallback=None):
         attempts = ctx.get("invalid_attempts", 0) + 1
         if attempts >= 3:
@@ -672,7 +687,8 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             full_reply += f"\n\nOpciones disponibles:\n{options_text}"
         return full_reply, interactive_fallback, ctx
 
-    if state == "IDLE":
+    if not is_media_unsupported:
+        if state == "IDLE":
         if user_type == "INACTIVE_AGENT":
             reply = "⚠️ Por el momento no estás activo para registrar cuotas.\n\nSin embargo, puedes validar números en base:"
             session.state = "WAITING_INACTIVE_ACTION"
@@ -1310,6 +1326,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             db.delete(session)
         else:
             reply, interactive_data, ctx = handle_invalid("Opción inválida.", "1. Sí, acepto\n2. No acepto", ctx.get("interactive_fallback"))
+    # End of if not is_media_unsupported
 
     session.context_data = json.dumps(ctx)
     db.commit()
