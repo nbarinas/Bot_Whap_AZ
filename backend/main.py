@@ -934,9 +934,9 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             val_phone = "".join(filter(str.isdigit, msg))
         
             if not val_phone:
-                reply, interactive_data, ctx = handle_invalid("No detecté ningún número en tu mensaje. Por favor, escribe el celular de 10 dígitos (ej: 3136623816).", "", ctx.get("interactive_fallback"))
+                reply, interactive_data, ctx = handle_invalid("No detecté ningún número en tu mensaje. Por favor, escribe el celular de 10 dígitos.", "", None)
             elif len(val_phone) < 10:
-                reply, interactive_data, ctx = handle_invalid(f"El número detectado '{val_phone}' es muy corto. Debe tener al menos 10 dígitos.", "", ctx.get("interactive_fallback"))
+                reply, interactive_data, ctx = handle_invalid(f"El número detectado '{val_phone}' es muy corto. Debe tener al menos 10 dígitos. Por favor, escríbelo de nuevo:", "", None)
             elif len(val_phone) >= 10:
                 if val_phone.startswith("57") and len(val_phone) == 12:
                     val_phone = val_phone[2:]
@@ -1110,7 +1110,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                         reply = f"El estudio en el que participaste fue cerrado el {date_str}. Te debería llegar un mensaje de súperincentivos.\n\n¿Ya hiciste los pasos para redimir tu bono?\n1. Sí\n2. No"
                         session.state = "WAITING_BONUS_REDEEM_ANSWER"
             else:
-                reply = "⚠️ Por favor escribe un número válido de al menos 10 dígitos."
+                reply, interactive_data, ctx = handle_invalid("Por favor escribe un número válido de al menos 10 dígitos:", "", None)
 
         elif state == "WAITING_REFERRAL_PHONE":
             ref_phone = "".join(filter(str.isdigit, msg))
@@ -1130,7 +1130,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     reply = "¡Perfecto! ¿Cuál es tu Nombre y Apellido completo?"
                     session.state = "WAITING_REFERRAL_NAME"
             else:
-                reply = "⚠️ Por favor escribe un número válido de al menos 10 dígitos."
+                reply, interactive_data, ctx = handle_invalid("Por favor escribe un número válido de al menos 10 dígitos:", "", None)
 
         elif state == "WAITING_REFERRAL_NAME":
             ctx["ref_name"] = message_raw.strip()
