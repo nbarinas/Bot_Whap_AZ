@@ -7,7 +7,7 @@ from typing import Optional
 import os
 from fastapi.security import OAuth2PasswordRequestForm
 
-from . import models, database, auth, media_handler
+from . import models, database, auth
 import re
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -518,8 +518,8 @@ def finalize_census_flow(db, phone, ctx):
         
     row = [censo_num, name, neighborhood, address, date_str, time_str] + photo_links
     
-    # Log to Sheets
-    media_handler.log_to_sheets(row)
+    # Log to Sheets (Disabled to avoid dependencies)
+    # media_handler.log_to_sheets(row)
     
     # Clean up session
     session = db.query(models.BotSession).filter(models.BotSession.phone_number == phone).first()
@@ -1189,30 +1189,28 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 filename = f"Censo_{censo_num}_1.jpg"
                 temp_path = os.path.join(os.path.dirname(__file__), f"temp_{phone}_1.jpg")
             
-                if media_handler.download_whatsapp_media(media_id, temp_path):
-                    drive_id = media_handler.upload_to_drive(temp_path, filename)
-                    if drive_id:
-                        ctx["photos"].append(drive_id)
-                        session.context_data = json.dumps(ctx)
-                        session.state = "WAITING_PHOTO_2_OR_FINISH"
-                        reply = "✅ Primera foto recibida y guardada en Drive.\n\n¿Deseas enviar una *segunda foto* o ya terminaste?"
-                        interactive_data = {
-                            "type": "button",
-                            "body": {"text": reply},
-                            "action": {
-                                "buttons": [
-                                    {"type": "reply", "reply": {"id": "1", "title": "Enviar otra"}},
-                                    {"type": "reply", "reply": {"id": "2", "title": "Terminar"}}
-                                ]
-                            }
+                # Drive integration disabled
+                if False: # media_handler.download_whatsapp_media(media_id, temp_path):
+                    pass
+                
+                # We skip Drive and just proceed to next state for now
+                if True:
+                    # ctx["photos"].append(drive_id)
+                    session.context_data = json.dumps(ctx)
+                    session.state = "WAITING_PHOTO_2_OR_FINISH"
+                    reply = "✅ Primera foto recibida (Guardado en Drive desactivado).\n\n¿Deseas enviar una *segunda foto* o ya terminaste?"
+                    interactive_data = {
+                        "type": "button",
+                        "body": {"text": reply},
+                        "action": {
+                            "buttons": [
+                                {"type": "reply", "reply": {"id": "1", "title": "Enviar otra"}},
+                                {"type": "reply", "reply": {"id": "2", "title": "Terminar"}}
+                            ]
                         }
-                        ctx["interactive_fallback"] = interactive_data
-                        db.commit()
-                        if os.path.exists(temp_path): os.remove(temp_path)
-                    else:
-                        reply = "⚠️ Error al subir a Drive. Intenta de nuevo."
-                else:
-                    reply = "⚠️ Error al descargar imagen. Reintenta."
+                    }
+                    ctx["interactive_fallback"] = interactive_data
+                    db.commit()
             else:
                 reply = "📷 Por favor, envía la foto de la entrega."
 
@@ -1222,18 +1220,12 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 filename = f"Censo_{censo_num}_2.jpg"
                 temp_path = os.path.join(os.path.dirname(__file__), f"temp_{phone}_2.jpg")
             
-                if media_handler.download_whatsapp_media(media_id, temp_path):
-                    drive_id = media_handler.upload_to_drive(temp_path, filename)
-                    if drive_id:
-                        ctx["photos"].append(drive_id)
-                        # Terminar flujo
-                        finish_msg = finalize_census_flow(db, phone, ctx)
-                        if os.path.exists(temp_path): os.remove(temp_path)
-                        return finish_msg, None
-                    else:
-                        reply = "⚠️ Error al subir a Drive. Intenta de nuevo."
-                else:
-                    reply = "⚠️ Error al descargar imagen. Reintenta."
+                # Drive integration disabled
+                if True:
+                    # ctx["photos"].append(drive_id)
+                    # Terminar flujo
+                    finish_msg = finalize_census_flow(db, phone, ctx)
+                    return finish_msg, None
             elif msg in ["2", "terminar"]:
                 finish_msg = finalize_census_flow(db, phone, ctx)
                 return finish_msg, None
