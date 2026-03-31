@@ -689,643 +689,643 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
 
     if not is_media_unsupported:
         if state == "IDLE":
-        if user_type == "INACTIVE_AGENT":
-            reply = "⚠️ Por el momento no estás activo para registrar cuotas.\n\nSin embargo, puedes validar números en base:"
-            session.state = "WAITING_INACTIVE_ACTION"
-            ctx["invalid_attempts"] = 0
-            interactive_data = {
-                "type": "button",
-                "body": {"text": reply},
-                "action": {
-                    "buttons": [
-                        {"type": "reply", "reply": {"id": "1", "title": "Validar número"}},
-                        {"type": "reply", "reply": {"id": "2", "title": "Salir"}}
-                    ]
-                }
-            }
-            ctx["interactive_fallback"] = interactive_data
-            
-        elif user_type == "AGENT":
-            # Ask for study
-            studies = db.query(models.BotQuota.study_code).filter(models.BotQuota.is_closed == 0).distinct().all()
-            if not studies:
-                reply = timeout_message + "No hay estudios activos en este momento."
-                ctx["available_studies"] = []
-                ctx["validate_option_idx"] = 1
-                session.state = "WAITING_STUDY"
+            if user_type == "INACTIVE_AGENT":
+                reply = "⚠️ Por el momento no estás activo para registrar cuotas.\n\nSin embargo, puedes validar números en base:"
+                session.state = "WAITING_INACTIVE_ACTION"
+                ctx["invalid_attempts"] = 0
                 interactive_data = {
                     "type": "button",
                     "body": {"text": reply},
                     "action": {
                         "buttons": [
-                            {"type": "reply", "reply": {"id": "1", "title": "Validar número"}}
+                            {"type": "reply", "reply": {"id": "1", "title": "Validar número"}},
+                            {"type": "reply", "reply": {"id": "2", "title": "Salir"}}
                         ]
                     }
                 }
                 ctx["interactive_fallback"] = interactive_data
-            else:
-                study_list = [s[0] for s in studies]
-                ctx["available_studies"] = study_list
-                ctx["invalid_attempts"] = 0
-                session.state = "WAITING_STUDY"
-                
-                opts = "\n".join([f"{i+1}. {s}" for i, s in enumerate(study_list)])
-                validate_idx = len(study_list) + 1
-                opts += f"\n{validate_idx}. Validar número en la base"
-                ctx["validate_option_idx"] = validate_idx
-                
-                greeting = f"¡Hola {agent_name}!" if agent_name else "¡Hola!"
-                reply = timeout_message + f"{greeting} ¿Qué deseas hacer?"
-                
-                rows = [{"id": str(i+1), "title": s[:24]} for i, s in enumerate(study_list)]
-                rows.append({"id": str(validate_idx), "title": "Validar en base"})
-                
-                interactive_data = {
-                    "type": "list",
-                    "body": {"text": reply},
-                    "action": {
-                        "button": "Ver Opciones",
-                        "sections": [{"title": "Estudios Disponibles", "rows": rows}]
-                    }
-                }
-                ctx["interactive_fallback"] = interactive_data
-                
-        elif user_type == "RESPONDENT":
-            calls_sql = text("SELECT study_id FROM calls WHERE phone_number = :p OR phone_number = :np")
-            call_records = db_users.execute(calls_sql, {"p": phone, "np": normalized_phone}).fetchall()
             
-            study_ids = [r.study_id for r in call_records if r.study_id]
-            if not study_ids:
-                user_type = "UNKNOWN"
-            else:
-                placeholders = ','.join([':p' + str(i) for i in range(len(study_ids))])
-                params = {f"p{i}": sid for i, sid in enumerate(study_ids)}
-                studies_sql = text(f"SELECT is_active, status, created_at FROM studies WHERE id IN ({placeholders}) ORDER BY created_at DESC, id DESC LIMIT 1")
-                studies_records = db_users.execute(studies_sql, params).fetchall()
-                
-                has_open = False
-                has_closed = False
-                closed_dates = []
-                
-                for sr in studies_records:
-                    is_closed = (sr.is_active == 0) or (str(sr.status).lower() == 'cerrado')
-                    if is_closed:
-                        has_closed = True
-                        if sr.created_at:
-                            closed_dates.append(sr.created_at.strftime("%Y-%m-%d"))
-                    else:
-                        has_open = True
-                        
-                if has_open and not has_closed:
-                    reply = timeout_message + "Tu participación ha sido registrada. Por el momento no se ha enviado la base de súperincentivos, en algunos días que cierre el estudio y luego de 15 días te llegará el proceso para que lo redimas. ¡Gracias por participar en nuestro estudio!"
-                    db.delete(session)
-                else:
-                    date_str = closed_dates[0] if closed_dates else "recientemente"
-                    reply = timeout_message + f"Tu participación fue en un estudio que cerró el {date_str}. Te debería llegar un mensaje de súperincentivos.\n\n¿Ya hiciste los pasos para redimir tu bono?"
-                    session.state = "WAITING_BONUS_REDEEM_ANSWER"
-                    ctx["invalid_attempts"] = 0
+            elif user_type == "AGENT":
+                # Ask for study
+                studies = db.query(models.BotQuota.study_code).filter(models.BotQuota.is_closed == 0).distinct().all()
+                if not studies:
+                    reply = timeout_message + "No hay estudios activos en este momento."
+                    ctx["available_studies"] = []
+                    ctx["validate_option_idx"] = 1
+                    session.state = "WAITING_STUDY"
                     interactive_data = {
                         "type": "button",
                         "body": {"text": reply},
                         "action": {
                             "buttons": [
-                                {"type": "reply", "reply": {"id": "1", "title": "Sí"}},
-                                {"type": "reply", "reply": {"id": "2", "title": "No"}}
+                                {"type": "reply", "reply": {"id": "1", "title": "Validar número"}}
                             ]
                         }
                     }
                     ctx["interactive_fallback"] = interactive_data
-
-        if user_type == "UNKNOWN":
-            reply = timeout_message + "¡Hola! Gracias por comunicarte con AZ Marketing. ¿En qué podemos ayudarte?"
-            session.state = "UNKNOWN_MENU"
-            ctx["invalid_attempts"] = 0
-            interactive_data = {
-                "type": "button",
-                "body": {"text": reply},
-                "action": {
-                    "buttons": [
-                        {"type": "reply", "reply": {"id": "1", "title": "Incentivo o bono"}},
-                        {"type": "reply", "reply": {"id": "2", "title": "Referir a un amig@"}}
-                    ]
-                }
-            }
-            ctx["interactive_fallback"] = interactive_data
+                else:
+                    study_list = [s[0] for s in studies]
+                    ctx["available_studies"] = study_list
+                    ctx["invalid_attempts"] = 0
+                    session.state = "WAITING_STUDY"
+                
+                    opts = "\n".join([f"{i+1}. {s}" for i, s in enumerate(study_list)])
+                    validate_idx = len(study_list) + 1
+                    opts += f"\n{validate_idx}. Validar número en la base"
+                    ctx["validate_option_idx"] = validate_idx
+                
+                    greeting = f"¡Hola {agent_name}!" if agent_name else "¡Hola!"
+                    reply = timeout_message + f"{greeting} ¿Qué deseas hacer?"
+                
+                    rows = [{"id": str(i+1), "title": s[:24]} for i, s in enumerate(study_list)]
+                    rows.append({"id": str(validate_idx), "title": "Validar en base"})
+                
+                    interactive_data = {
+                        "type": "list",
+                        "body": {"text": reply},
+                        "action": {
+                            "button": "Ver Opciones",
+                            "sections": [{"title": "Estudios Disponibles", "rows": rows}]
+                        }
+                    }
+                    ctx["interactive_fallback"] = interactive_data
+                
+            elif user_type == "RESPONDENT":
+                calls_sql = text("SELECT study_id FROM calls WHERE phone_number = :p OR phone_number = :np")
+                call_records = db_users.execute(calls_sql, {"p": phone, "np": normalized_phone}).fetchall()
             
-    elif state == "WAITING_STUDY":
-        available = ctx.get("available_studies", [])
-        validate_idx = ctx.get("validate_option_idx")
-        opts_text = "\n".join([f"{i+1}. {s}" for i, s in enumerate(available)])
-        opts_text += f"\n{validate_idx}. Validar número en la base" if validate_idx else ""
-        try:
-            choice = int(msg)
-            if 1 <= choice <= len(available):
-                study_code = available[choice - 1]
-                ctx["study_code"] = study_code
+                study_ids = [r.study_id for r in call_records if r.study_id]
+                if not study_ids:
+                    user_type = "UNKNOWN"
+                else:
+                    placeholders = ','.join([':p' + str(i) for i in range(len(study_ids))])
+                    params = {f"p{i}": sid for i, sid in enumerate(study_ids)}
+                    studies_sql = text(f"SELECT is_active, status, created_at FROM studies WHERE id IN ({placeholders}) ORDER BY created_at DESC, id DESC LIMIT 1")
+                    studies_records = db_users.execute(studies_sql, params).fetchall()
+                
+                    has_open = False
+                    has_closed = False
+                    closed_dates = []
+                
+                    for sr in studies_records:
+                        is_closed = (sr.is_active == 0) or (str(sr.status).lower() == 'cerrado')
+                        if is_closed:
+                            has_closed = True
+                            if sr.created_at:
+                                closed_dates.append(sr.created_at.strftime("%Y-%m-%d"))
+                        else:
+                            has_open = True
+                        
+                    if has_open and not has_closed:
+                        reply = timeout_message + "Tu participación ha sido registrada. Por el momento no se ha enviado la base de súperincentivos, en algunos días que cierre el estudio y luego de 15 días te llegará el proceso para que lo redimas. ¡Gracias por participar en nuestro estudio!"
+                        db.delete(session)
+                    else:
+                        date_str = closed_dates[0] if closed_dates else "recientemente"
+                        reply = timeout_message + f"Tu participación fue en un estudio que cerró el {date_str}. Te debería llegar un mensaje de súperincentivos.\n\n¿Ya hiciste los pasos para redimir tu bono?"
+                        session.state = "WAITING_BONUS_REDEEM_ANSWER"
+                        ctx["invalid_attempts"] = 0
+                        interactive_data = {
+                            "type": "button",
+                            "body": {"text": reply},
+                            "action": {
+                                "buttons": [
+                                    {"type": "reply", "reply": {"id": "1", "title": "Sí"}},
+                                    {"type": "reply", "reply": {"id": "2", "title": "No"}}
+                                ]
+                            }
+                        }
+                        ctx["interactive_fallback"] = interactive_data
+
+            if user_type == "UNKNOWN":
+                reply = timeout_message + "¡Hola! Gracias por comunicarte con AZ Marketing. ¿En qué podemos ayudarte?"
+                session.state = "UNKNOWN_MENU"
                 ctx["invalid_attempts"] = 0
-                session.state = "WAITING_ACTION"
-                reply = f"Estudio {study_code} seleccionado. ¿Qué deseas hacer?"
                 interactive_data = {
                     "type": "button",
                     "body": {"text": reply},
                     "action": {
                         "buttons": [
-                            {"type": "reply", "reply": {"id": "1", "title": "Añadir 1 encuesta"}},
-                            {"type": "reply", "reply": {"id": "2", "title": "Borrar mi última"}},
-                            {"type": "reply", "reply": {"id": "3", "title": "Ver cuotas actuales"}}
+                            {"type": "reply", "reply": {"id": "1", "title": "Incentivo o bono"}},
+                            {"type": "reply", "reply": {"id": "2", "title": "Referir a un amig@"}}
                         ]
                     }
                 }
                 ctx["interactive_fallback"] = interactive_data
-            elif validate_idx and choice == validate_idx:
-                reply = "Por favor, digite el número de celular a validar:"
-                session.state = "WAITING_VALIDATION_PHONE"
-                ctx["invalid_attempts"] = 0
-            else:
-                reply, interactive_data, ctx = handle_invalid("Opción inválida.", opts_text, ctx.get("interactive_fallback"))
-        except ValueError:
-            reply, interactive_data, ctx = handle_invalid("Selección inválida.", opts_text, ctx.get("interactive_fallback"))
-
-    elif state == "WAITING_ACTION":
-        opts_text = "1. Añadir 1 encuesta\n2. Borrar mi última\n3. Ver cuotas actuales"
-        if msg == "2":
-            # Delete last submission
-            study_code = ctx.get("study_code")
-            study_quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
-            q_ids = [q.id for q in study_quotas]
             
-            last_sub = db.query(models.QuotaSubmission).filter(
-                models.QuotaSubmission.phone_number == phone,
-                models.QuotaSubmission.bot_quota_id.in_(q_ids)
-            ).order_by(models.QuotaSubmission.submitted_at.desc()).first()
-            
-            if last_sub:
-                if last_sub.is_deleted == 1:
-                    reply = "⚠️ Ya borraste tu última encuesta registrada. No puedes retroceder más."
+        elif state == "WAITING_STUDY":
+            available = ctx.get("available_studies", [])
+            validate_idx = ctx.get("validate_option_idx")
+            opts_text = "\n".join([f"{i+1}. {s}" for i, s in enumerate(available)])
+            opts_text += f"\n{validate_idx}. Validar número en la base" if validate_idx else ""
+            try:
+                choice = int(msg)
+                if 1 <= choice <= len(available):
+                    study_code = available[choice - 1]
+                    ctx["study_code"] = study_code
+                    ctx["invalid_attempts"] = 0
+                    session.state = "WAITING_ACTION"
+                    reply = f"Estudio {study_code} seleccionado. ¿Qué deseas hacer?"
+                    interactive_data = {
+                        "type": "button",
+                        "body": {"text": reply},
+                        "action": {
+                            "buttons": [
+                                {"type": "reply", "reply": {"id": "1", "title": "Añadir 1 encuesta"}},
+                                {"type": "reply", "reply": {"id": "2", "title": "Borrar mi última"}},
+                                {"type": "reply", "reply": {"id": "3", "title": "Ver cuotas actuales"}}
+                            ]
+                        }
+                    }
+                    ctx["interactive_fallback"] = interactive_data
+                elif validate_idx and choice == validate_idx:
+                    reply = "Por favor, digite el número de celular a validar:"
+                    session.state = "WAITING_VALIDATION_PHONE"
+                    ctx["invalid_attempts"] = 0
                 else:
-                    last_sub.is_deleted = 1
-                    quota = db.query(models.BotQuota).get(last_sub.bot_quota_id)
-                    quota.current_count -= 1
-                    
-                    report = build_study_report(db, study_code)
-                    reply = f"✅ Se ha borrado tu última encuesta registrada con éxito.\n{report}"
-            else:
-                reply = "⚠️ No tienes encuestas registradas recientes en este estudio para borrar."
-                
-            session.state = "IDLE"
-            ctx = {}
-            
-        elif msg == "3":
-            # View current matrix
-            study_code = ctx.get("study_code")
-            report = build_study_report(db, study_code)
-            reply = report
-            session.state = "IDLE"
-            ctx = {}
-            
-        elif msg == "1":
-            ctx["action"] = "ADD"
-            ctx["selected_path"] = []
-            ctx["invalid_attempts"] = 0
-            reply_text, next_state, next_interactive = compute_next_bot_step_interactive(db, ctx, phone)
-            reply = reply_text
-            interactive_data = next_interactive
-            session.state = next_state
-        else:
-            reply, interactive_data, ctx = handle_invalid("Selección inválida.", opts_text, ctx.get("interactive_fallback"))
+                    reply, interactive_data, ctx = handle_invalid("Opción inválida.", opts_text, ctx.get("interactive_fallback"))
+            except ValueError:
+                reply, interactive_data, ctx = handle_invalid("Selección inválida.", opts_text, ctx.get("interactive_fallback"))
 
-    elif state == "WAITING_CATEGORY":
-        # Handle the category selection
-        options = ctx.get("current_options", [])
-        opts_text = "\n".join([f"{i+1}. {o}" for i, o in enumerate(options)])
-        try:
-            choice = int(msg) - 1
-            if 0 <= choice < len(options):
-                chosen_val = options[choice]
-                ctx["selected_path"].append(chosen_val)
+        elif state == "WAITING_ACTION":
+            opts_text = "1. Añadir 1 encuesta\n2. Borrar mi última\n3. Ver cuotas actuales"
+            if msg == "2":
+                # Delete last submission
+                study_code = ctx.get("study_code")
+                study_quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
+                q_ids = [q.id for q in study_quotas]
+            
+                last_sub = db.query(models.QuotaSubmission).filter(
+                    models.QuotaSubmission.phone_number == phone,
+                    models.QuotaSubmission.bot_quota_id.in_(q_ids)
+                ).order_by(models.QuotaSubmission.submitted_at.desc()).first()
+            
+                if last_sub:
+                    if last_sub.is_deleted == 1:
+                        reply = "⚠️ Ya borraste tu última encuesta registrada. No puedes retroceder más."
+                    else:
+                        last_sub.is_deleted = 1
+                        quota = db.query(models.BotQuota).get(last_sub.bot_quota_id)
+                        quota.current_count -= 1
+                    
+                        report = build_study_report(db, study_code)
+                        reply = f"✅ Se ha borrado tu última encuesta registrada con éxito.\n{report}"
+                else:
+                    reply = "⚠️ No tienes encuestas registradas recientes en este estudio para borrar."
+                
+                session.state = "IDLE"
+                ctx = {}
+            
+            elif msg == "3":
+                # View current matrix
+                study_code = ctx.get("study_code")
+                report = build_study_report(db, study_code)
+                reply = report
+                session.state = "IDLE"
+                ctx = {}
+            
+            elif msg == "1":
+                ctx["action"] = "ADD"
+                ctx["selected_path"] = []
                 ctx["invalid_attempts"] = 0
-                # Compute next step
                 reply_text, next_state, next_interactive = compute_next_bot_step_interactive(db, ctx, phone)
                 reply = reply_text
                 interactive_data = next_interactive
                 session.state = next_state
-                if next_state == "IDLE":
-                    ctx = {} # Clean up
             else:
-                reply, interactive_data, ctx = handle_invalid("Opción inválida.", opts_text, ctx.get("interactive_fallback"))
-        except ValueError:
-            reply, interactive_data, ctx = handle_invalid("Selección inválida.", opts_text, ctx.get("interactive_fallback"))
+                reply, interactive_data, ctx = handle_invalid("Selección inválida.", opts_text, ctx.get("interactive_fallback"))
 
-    # --- NUEVA RUTA: ESTADO VALIDACION NUMEROS ---
-    
-    elif state == "WAITING_INACTIVE_ACTION":
-        if msg == "1":
-            reply = "Por favor, digite el número de celular a validar:"
-            session.state = "WAITING_VALIDATION_PHONE"
-            ctx["invalid_attempts"] = 0
-        elif msg == "2":
-            reply = "¡Gracias! Hasta luego."
-            db.delete(session)
-        else:
-            reply, ctx = handle_invalid("Opción inválida.", "1. Validar número\n2. Salir")
-            
-    elif state == "WAITING_VALIDATION_PHONE":
-        # Clean number (removing spaces, dashes, etc.)
-        val_phone = "".join(filter(str.isdigit, msg))
-        
-        if not val_phone:
-            reply, interactive_data, ctx = handle_invalid("No detecté ningún número en tu mensaje. Por favor, escribe el celular de 10 dígitos (ej: 3136623816).", "", ctx.get("interactive_fallback"))
-        elif len(val_phone) < 10:
-            reply, interactive_data, ctx = handle_invalid(f"El número detectado '{val_phone}' es muy corto. Debe tener al menos 10 dígitos.", "", ctx.get("interactive_fallback"))
-        elif len(val_phone) >= 10:
-            if val_phone.startswith("57") and len(val_phone) == 12:
-                val_phone = val_phone[2:]
-            
-            # Busco en base de datos calls
-            calls_sql = text("""
-                SELECT c.created_at, s.name as study_name
-                FROM calls c
-                LEFT JOIN studies s ON c.study_id = s.id
-                WHERE c.phone_number = :p OR c.phone_number = :np
-                ORDER BY s.created_at DESC, c.id DESC
-            """)
-            records = db_users.execute(calls_sql, {"p": val_phone, "np": "57" + val_phone}).fetchall()
-            if records:
-                total_count = len(records)
-                latest = records[0]
-                latest_date_str = latest.created_at.strftime('%Y-%m-%d') if latest.created_at else "desconocida"
-                latest_study = latest.study_name if latest.study_name else "desconocido"
-                
-                if total_count == 1:
-                    reply = f"⚠️ Ojo, esta persona participó la última vez en la base *{latest_study}* de fecha *{latest_date_str}*.\n\nEn total ha participado 1 vez.\n\n¿Quieres validar otro número?"
+        elif state == "WAITING_CATEGORY":
+            # Handle the category selection
+            options = ctx.get("current_options", [])
+            opts_text = "\n".join([f"{i+1}. {o}" for i, o in enumerate(options)])
+            try:
+                choice = int(msg) - 1
+                if 0 <= choice < len(options):
+                    chosen_val = options[choice]
+                    ctx["selected_path"].append(chosen_val)
+                    ctx["invalid_attempts"] = 0
+                    # Compute next step
+                    reply_text, next_state, next_interactive = compute_next_bot_step_interactive(db, ctx, phone)
+                    reply = reply_text
+                    interactive_data = next_interactive
+                    session.state = next_state
+                    if next_state == "IDLE":
+                        ctx = {} # Clean up
                 else:
-                    historial = []
-                    # Mostramos hasta las últimas 5 adicionales
-                    for r in records[1:6]:
-                        d_str = r.created_at.strftime('%Y-%m-%d') if r.created_at else "desconocida"
-                        s_name = r.study_name if r.study_name else "desconocido"
-                        historial.append(f"• {s_name} ({d_str})")
-                        
-                    if total_count > 6:
-                        historial.append(f"... y {total_count - 6} más.")
-                        
-                    historial_str = "\n".join(historial)
-                    reply = f"⚠️ Ojo, esta persona participó la última vez en la base *{latest_study}* de fecha *{latest_date_str}*.\n\nEn total ha participado *{total_count} veces*. Historial reciente:\n{historial_str}\n\n¿Quieres validar otro número?"
-            else:
-                reply = f"✅ El número *{val_phone}* no está en la base. Puede hacer encuesta.\n\n¿Quieres validar otro número?"
-                
-            session.state = "WAITING_VALIDATION_MORE"
-            ctx["invalid_attempts"] = 0
-            interactive_data = {
-                "type": "button",
-                "body": {"text": reply},
-                "action": {
-                    "buttons": [
-                        {"type": "reply", "reply": {"id": "1", "title": "Sí"}},
-                        {"type": "reply", "reply": {"id": "2", "title": "No o cerrar"}}
-                    ]
-                }
-            }
-            ctx["interactive_fallback"] = interactive_data
-            
-    elif state == "WAITING_VALIDATION_MORE":
-        if msg in ["1", "si", "sí"]:
-            reply = "Por favor, digite el siguiente número de celular a validar:"
-            session.state = "WAITING_VALIDATION_PHONE"
-            ctx["invalid_attempts"] = 0
-        elif msg in ["2", "no", "cerrar", "salir"]:
-            reply = "¡Gracias por validar! Hasta luego."
-            session.state = "IDLE"
-            ctx = {}
-        else:
-            reply, interactive_data, ctx = handle_invalid("Responde 1 para validar otro o 2 para cerrar.", "1. Sí\n2. No o cerrar", ctx.get("interactive_fallback"))
+                    reply, interactive_data, ctx = handle_invalid("Opción inválida.", opts_text, ctx.get("interactive_fallback"))
+            except ValueError:
+                reply, interactive_data, ctx = handle_invalid("Selección inválida.", opts_text, ctx.get("interactive_fallback"))
 
-    # --- NUEVAS RUTAS: RESPONDENTS & DESCONOCIDOS ---
+        # --- NUEVA RUTA: ESTADO VALIDACION NUMEROS ---
     
-    elif state == "WAITING_BONUS_REDEEM_ANSWER":
-        if msg == "1":
-            reply = "¿Pudiste resolver para el bono exitosamente?\n1. Sí pude\n2. No pude"
-            session.state = "WAITING_BONUS_RESOLVED"
-        elif msg == "2":
-            # IDs de los archivos en Meta (estos deben ser generados con un token válido)
-            # Para bono.jpeg y Video Bono Comprimido.mp4
-            IMAGE_ID = "1292705149412146" 
-            VIDEO_ID = "934845532580264"
-            
-            if IMAGE_ID != "PENDIENTE_TOKEN_INVALIDO" and phone != "0000":
-                send_whatsapp_media(phone, "image", IMAGE_ID, "📸 Imagen del bono")
-                send_whatsapp_media(phone, "video", VIDEO_ID, "🎥 Video explicativo")
-
-            reply = "Para redimir tu bono, por favor mira este video explicativo que te acabamos de enviar.\n\nDespués de ver el video o seguir los pasos, ¿pudiste resolver para tu bono?\n1. Sí pude\n2. No pude"
-            session.state = "WAITING_BONUS_RESOLVED"
-        else:
-            reply = "⚠️ Opción inválida. \n¿Ya hiciste los pasos para redimir tu bono?\n1. Sí\n2. No"
-
-    elif state == "WAITING_BONUS_RESOLVED":
-        if msg == "1":
-            reply = "¡Perfecto! Gracias por participar en nuestro estudio. Esperamos contar contigo en futuras investigaciones. ¡Hasta luego!"
-            db.delete(session)
-        elif msg == "2":
-            reply = "Por favor, busca en tus chats de WhatsApp si tienes un mensaje nuestro de la cuenta de 'Súperincentivos' y sigue los pasos que están en ese chat.\n\nDespués de revisar, ¿pudiste resolverlo?"
-            session.state = "WAITING_BONUS_SUPERINCENTIVOS"
-            interactive_data = {
-                "type": "button",
-                "body": {"text": reply},
-                "action": {
-                    "buttons": [
-                        {"type": "reply", "reply": {"id": "1", "title": "Sí pude"}},
-                        {"type": "reply", "reply": {"id": "2", "title": "No pude"}}
-                    ]
-                }
-            }
-            ctx["interactive_fallback"] = interactive_data
-        else:
-            reply, interactive_data, ctx = handle_invalid("Opción inválida.", "1. Sí pude\n2. No pude", ctx.get("interactive_fallback"))
-
-    elif state == "WAITING_BONUS_SUPERINCENTIVOS":
-        if msg == "1":
-            reply = "¡Excelente! Muchas gracias por participar. ¡Hasta luego!"
-            db.delete(session)
-        elif msg == "2":
-            reply = "Entendido. Voy a escribirle a un agente humano y nos estaremos comunicando contigo a la brevedad posible para ayudarte. ¡Gracias por tu paciencia!"
-            
-            n_phone = phone[2:] if phone.startswith("57") and len(phone) == 12 else phone
-            name_sql = text("SELECT person_name FROM calls WHERE phone_number = :p OR phone_number = :np LIMIT 1")
-            name_rec = db_users.execute(name_sql, {"p": phone, "np": n_phone}).first()
-            resp_name = name_rec.person_name if (name_rec and name_rec.person_name) else "Usuario Sin Nombre"
-            
-            alert_msg = f"🚨 *Alerta de Súperincentivos*\n\nUna persona intentó redimir su bono pero reporta que NO pudo resolver el proceso (vio el video y buscó el chat).\n\n👤 *Nombre (BD):* {resp_name}\n📞 *Soporte a:* {phone}\n📅 *Fecha:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            send_whatsapp_message("573136623816", alert_msg)
-            
-            db.delete(session)
-        else:
-            reply, interactive_data, ctx = handle_invalid("Opción inválida.", "1. Sí pude\n2. No pude", ctx.get("interactive_fallback"))
-
-    elif state == "UNKNOWN_MENU":
-        if msg == "1":
-            reply = "Por favor, escribe el NÚMERO DE CELULAR (10 dígitos) del cual deseas consultar el estado de tu incentivo o bono:"
-            session.state = "WAITING_BOND_PHONE"
-            ctx["invalid_attempts"] = 0
-        elif msg == "2":
-            reply = "¡Gracias por estar interesado en participar en un estudio de investigación de mercados! Por favor, regálame TU NÚMERO DE CELULAR (10 dígitos):"
-            session.state = "WAITING_REFERRAL_PHONE"
-            ctx["invalid_attempts"] = 0
-        else:
-            reply, interactive_data, ctx = handle_invalid("Opción inválida.", "1. Ver estado...\n2. Referir...", ctx.get("interactive_fallback"))
-
-    elif state == "WAITING_BOND_PHONE":
-        bond_phone = "".join(filter(str.isdigit, msg))
-        if len(bond_phone) >= 10:
-            if bond_phone.startswith("57") and len(bond_phone) == 12:
-                bond_phone = bond_phone[2:]
-            
-            calls_sql = text("SELECT study_id FROM calls WHERE phone_number = :p")
-            call_records = db_users.execute(calls_sql, {"p": bond_phone}).fetchall()
-            study_ids = [r.study_id for r in call_records if r.study_id]
-            
-            if not study_ids:
-                reply = "Ese número no está registrado en nuestros estudios o bases recientes. Gracias por comunicarte, ¡hasta luego!"
+        elif state == "WAITING_INACTIVE_ACTION":
+            if msg == "1":
+                reply = "Por favor, digite el número de celular a validar:"
+                session.state = "WAITING_VALIDATION_PHONE"
+                ctx["invalid_attempts"] = 0
+            elif msg == "2":
+                reply = "¡Gracias! Hasta luego."
                 db.delete(session)
             else:
-                placeholders = ','.join([':p' + str(i) for i in range(len(study_ids))])
-                params = {f"p{i}": sid for i, sid in enumerate(study_ids)}
-                studies_sql = text(f"SELECT is_active, status, created_at FROM studies WHERE id IN ({placeholders}) ORDER BY created_at DESC, id DESC LIMIT 1")
-                studies_records = db_users.execute(studies_sql, params).fetchall()
+                reply, ctx = handle_invalid("Opción inválida.", "1. Validar número\n2. Salir")
+            
+        elif state == "WAITING_VALIDATION_PHONE":
+            # Clean number (removing spaces, dashes, etc.)
+            val_phone = "".join(filter(str.isdigit, msg))
+        
+            if not val_phone:
+                reply, interactive_data, ctx = handle_invalid("No detecté ningún número en tu mensaje. Por favor, escribe el celular de 10 dígitos (ej: 3136623816).", "", ctx.get("interactive_fallback"))
+            elif len(val_phone) < 10:
+                reply, interactive_data, ctx = handle_invalid(f"El número detectado '{val_phone}' es muy corto. Debe tener al menos 10 dígitos.", "", ctx.get("interactive_fallback"))
+            elif len(val_phone) >= 10:
+                if val_phone.startswith("57") and len(val_phone) == 12:
+                    val_phone = val_phone[2:]
+            
+                # Busco en base de datos calls
+                calls_sql = text("""
+                    SELECT c.created_at, s.name as study_name
+                    FROM calls c
+                    LEFT JOIN studies s ON c.study_id = s.id
+                    WHERE c.phone_number = :p OR c.phone_number = :np
+                    ORDER BY s.created_at DESC, c.id DESC
+                """)
+                records = db_users.execute(calls_sql, {"p": val_phone, "np": "57" + val_phone}).fetchall()
+                if records:
+                    total_count = len(records)
+                    latest = records[0]
+                    latest_date_str = latest.created_at.strftime('%Y-%m-%d') if latest.created_at else "desconocida"
+                    latest_study = latest.study_name if latest.study_name else "desconocido"
                 
-                has_open = False
-                has_closed = False
-                closed_dates = []
-                for sr in studies_records:
-                    if (sr.is_active == 0) or (str(sr.status).lower() == 'cerrado'):
-                        has_closed = True
-                        if sr.created_at: closed_dates.append(sr.created_at.strftime("%Y-%m-%d"))
+                    if total_count == 1:
+                        reply = f"⚠️ Ojo, esta persona participó la última vez en la base *{latest_study}* de fecha *{latest_date_str}*.\n\nEn total ha participado 1 vez.\n\n¿Quieres validar otro número?"
                     else:
-                        has_open = True
+                        historial = []
+                        # Mostramos hasta las últimas 5 adicionales
+                        for r in records[1:6]:
+                            d_str = r.created_at.strftime('%Y-%m-%d') if r.created_at else "desconocida"
+                            s_name = r.study_name if r.study_name else "desconocido"
+                            historial.append(f"• {s_name} ({d_str})")
                         
-                if has_open and not has_closed:
-                    reply = "Tu participación ha sido registrada. Por el momento no se ha enviado la base de súperincentivos, en algunos días que cierre el estudio y luego de 15 días te llegará el proceso para que lo redimas. ¡Gracias por participar en nuestro estudio!"
+                        if total_count > 6:
+                            historial.append(f"... y {total_count - 6} más.")
+                        
+                        historial_str = "\n".join(historial)
+                        reply = f"⚠️ Ojo, esta persona participó la última vez en la base *{latest_study}* de fecha *{latest_date_str}*.\n\nEn total ha participado *{total_count} veces*. Historial reciente:\n{historial_str}\n\n¿Quieres validar otro número?"
+                else:
+                    reply = f"✅ El número *{val_phone}* no está en la base. Puede hacer encuesta.\n\n¿Quieres validar otro número?"
+                
+                session.state = "WAITING_VALIDATION_MORE"
+                ctx["invalid_attempts"] = 0
+                interactive_data = {
+                    "type": "button",
+                    "body": {"text": reply},
+                    "action": {
+                        "buttons": [
+                            {"type": "reply", "reply": {"id": "1", "title": "Sí"}},
+                            {"type": "reply", "reply": {"id": "2", "title": "No o cerrar"}}
+                        ]
+                    }
+                }
+                ctx["interactive_fallback"] = interactive_data
+            
+        elif state == "WAITING_VALIDATION_MORE":
+            if msg in ["1", "si", "sí"]:
+                reply = "Por favor, digite el siguiente número de celular a validar:"
+                session.state = "WAITING_VALIDATION_PHONE"
+                ctx["invalid_attempts"] = 0
+            elif msg in ["2", "no", "cerrar", "salir"]:
+                reply = "¡Gracias por validar! Hasta luego."
+                session.state = "IDLE"
+                ctx = {}
+            else:
+                reply, interactive_data, ctx = handle_invalid("Responde 1 para validar otro o 2 para cerrar.", "1. Sí\n2. No o cerrar", ctx.get("interactive_fallback"))
+
+        # --- NUEVAS RUTAS: RESPONDENTS & DESCONOCIDOS ---
+    
+        elif state == "WAITING_BONUS_REDEEM_ANSWER":
+            if msg == "1":
+                reply = "¿Pudiste resolver para el bono exitosamente?\n1. Sí pude\n2. No pude"
+                session.state = "WAITING_BONUS_RESOLVED"
+            elif msg == "2":
+                # IDs de los archivos en Meta (estos deben ser generados con un token válido)
+                # Para bono.jpeg y Video Bono Comprimido.mp4
+                IMAGE_ID = "1292705149412146" 
+                VIDEO_ID = "934845532580264"
+            
+                if IMAGE_ID != "PENDIENTE_TOKEN_INVALIDO" and phone != "0000":
+                    send_whatsapp_media(phone, "image", IMAGE_ID, "📸 Imagen del bono")
+                    send_whatsapp_media(phone, "video", VIDEO_ID, "🎥 Video explicativo")
+
+                reply = "Para redimir tu bono, por favor mira este video explicativo que te acabamos de enviar.\n\nDespués de ver el video o seguir los pasos, ¿pudiste resolver para tu bono?\n1. Sí pude\n2. No pude"
+                session.state = "WAITING_BONUS_RESOLVED"
+            else:
+                reply = "⚠️ Opción inválida. \n¿Ya hiciste los pasos para redimir tu bono?\n1. Sí\n2. No"
+
+        elif state == "WAITING_BONUS_RESOLVED":
+            if msg == "1":
+                reply = "¡Perfecto! Gracias por participar en nuestro estudio. Esperamos contar contigo en futuras investigaciones. ¡Hasta luego!"
+                db.delete(session)
+            elif msg == "2":
+                reply = "Por favor, busca en tus chats de WhatsApp si tienes un mensaje nuestro de la cuenta de 'Súperincentivos' y sigue los pasos que están en ese chat.\n\nDespués de revisar, ¿pudiste resolverlo?"
+                session.state = "WAITING_BONUS_SUPERINCENTIVOS"
+                interactive_data = {
+                    "type": "button",
+                    "body": {"text": reply},
+                    "action": {
+                        "buttons": [
+                            {"type": "reply", "reply": {"id": "1", "title": "Sí pude"}},
+                            {"type": "reply", "reply": {"id": "2", "title": "No pude"}}
+                        ]
+                    }
+                }
+                ctx["interactive_fallback"] = interactive_data
+            else:
+                reply, interactive_data, ctx = handle_invalid("Opción inválida.", "1. Sí pude\n2. No pude", ctx.get("interactive_fallback"))
+
+        elif state == "WAITING_BONUS_SUPERINCENTIVOS":
+            if msg == "1":
+                reply = "¡Excelente! Muchas gracias por participar. ¡Hasta luego!"
+                db.delete(session)
+            elif msg == "2":
+                reply = "Entendido. Voy a escribirle a un agente humano y nos estaremos comunicando contigo a la brevedad posible para ayudarte. ¡Gracias por tu paciencia!"
+            
+                n_phone = phone[2:] if phone.startswith("57") and len(phone) == 12 else phone
+                name_sql = text("SELECT person_name FROM calls WHERE phone_number = :p OR phone_number = :np LIMIT 1")
+                name_rec = db_users.execute(name_sql, {"p": phone, "np": n_phone}).first()
+                resp_name = name_rec.person_name if (name_rec and name_rec.person_name) else "Usuario Sin Nombre"
+            
+                alert_msg = f"🚨 *Alerta de Súperincentivos*\n\nUna persona intentó redimir su bono pero reporta que NO pudo resolver el proceso (vio el video y buscó el chat).\n\n👤 *Nombre (BD):* {resp_name}\n📞 *Soporte a:* {phone}\n📅 *Fecha:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                send_whatsapp_message("573136623816", alert_msg)
+            
+                db.delete(session)
+            else:
+                reply, interactive_data, ctx = handle_invalid("Opción inválida.", "1. Sí pude\n2. No pude", ctx.get("interactive_fallback"))
+
+        elif state == "UNKNOWN_MENU":
+            if msg == "1":
+                reply = "Por favor, escribe el NÚMERO DE CELULAR (10 dígitos) del cual deseas consultar el estado de tu incentivo o bono:"
+                session.state = "WAITING_BOND_PHONE"
+                ctx["invalid_attempts"] = 0
+            elif msg == "2":
+                reply = "¡Gracias por estar interesado en participar en un estudio de investigación de mercados! Por favor, regálame TU NÚMERO DE CELULAR (10 dígitos):"
+                session.state = "WAITING_REFERRAL_PHONE"
+                ctx["invalid_attempts"] = 0
+            else:
+                reply, interactive_data, ctx = handle_invalid("Opción inválida.", "1. Ver estado...\n2. Referir...", ctx.get("interactive_fallback"))
+
+        elif state == "WAITING_BOND_PHONE":
+            bond_phone = "".join(filter(str.isdigit, msg))
+            if len(bond_phone) >= 10:
+                if bond_phone.startswith("57") and len(bond_phone) == 12:
+                    bond_phone = bond_phone[2:]
+            
+                calls_sql = text("SELECT study_id FROM calls WHERE phone_number = :p")
+                call_records = db_users.execute(calls_sql, {"p": bond_phone}).fetchall()
+                study_ids = [r.study_id for r in call_records if r.study_id]
+            
+                if not study_ids:
+                    reply = "Ese número no está registrado en nuestros estudios o bases recientes. Gracias por comunicarte, ¡hasta luego!"
                     db.delete(session)
                 else:
-                    date_str = closed_dates[0] if closed_dates else "recientemente"
-                    reply = f"El estudio en el que participaste fue cerrado el {date_str}. Te debería llegar un mensaje de súperincentivos.\n\n¿Ya hiciste los pasos para redimir tu bono?\n1. Sí\n2. No"
-                    session.state = "WAITING_BONUS_REDEEM_ANSWER"
-        else:
-            reply = "⚠️ Por favor escribe un número válido de al menos 10 dígitos."
-
-    elif state == "WAITING_REFERRAL_PHONE":
-        ref_phone = "".join(filter(str.isdigit, msg))
-        if len(ref_phone) >= 10:
-            if ref_phone.startswith("57") and len(ref_phone) == 12:
-                ref_phone = ref_phone[2:]
+                    placeholders = ','.join([':p' + str(i) for i in range(len(study_ids))])
+                    params = {f"p{i}": sid for i, sid in enumerate(study_ids)}
+                    studies_sql = text(f"SELECT is_active, status, created_at FROM studies WHERE id IN ({placeholders}) ORDER BY created_at DESC, id DESC LIMIT 1")
+                    studies_records = db_users.execute(studies_sql, params).fetchall()
                 
-            six_months_ago = datetime.now() - timedelta(days=180)
-            calls_sql = text("SELECT id FROM calls WHERE phone_number = :p AND created_at >= :d")
-            recent_call = db_users.execute(calls_sql, {"p": ref_phone, "d": six_months_ago}).first()
-            
-            if recent_call:
-                reply = "Gracias, pero vemos que ya participaste en un estudio con nosotros en los últimos 6 meses. Por el momento no podemos registrarte de nuevo. ¡Hasta luego!"
-                db.delete(session)
+                    has_open = False
+                    has_closed = False
+                    closed_dates = []
+                    for sr in studies_records:
+                        if (sr.is_active == 0) or (str(sr.status).lower() == 'cerrado'):
+                            has_closed = True
+                            if sr.created_at: closed_dates.append(sr.created_at.strftime("%Y-%m-%d"))
+                        else:
+                            has_open = True
+                        
+                    if has_open and not has_closed:
+                        reply = "Tu participación ha sido registrada. Por el momento no se ha enviado la base de súperincentivos, en algunos días que cierre el estudio y luego de 15 días te llegará el proceso para que lo redimas. ¡Gracias por participar en nuestro estudio!"
+                        db.delete(session)
+                    else:
+                        date_str = closed_dates[0] if closed_dates else "recientemente"
+                        reply = f"El estudio en el que participaste fue cerrado el {date_str}. Te debería llegar un mensaje de súperincentivos.\n\n¿Ya hiciste los pasos para redimir tu bono?\n1. Sí\n2. No"
+                        session.state = "WAITING_BONUS_REDEEM_ANSWER"
             else:
-                ctx["ref_phone"] = ref_phone
-                reply = "¡Perfecto! ¿Cuál es tu Nombre y Apellido completo?"
-                session.state = "WAITING_REFERRAL_NAME"
-        else:
-            reply = "⚠️ Por favor escribe un número válido de al menos 10 dígitos."
+                reply = "⚠️ Por favor escribe un número válido de al menos 10 dígitos."
 
-    elif state == "WAITING_REFERRAL_NAME":
-        ctx["ref_name"] = message_raw.strip()
-        reply = "Gracias. Selecciona tu Género:"
-        session.state = "WAITING_REFERRAL_GENDER"
-        ctx["invalid_attempts"] = 0
-        interactive_data = {
-            "type": "list",
-            "body": {"text": reply},
-            "action": {
-                "button": "Ver Opciones",
-                "sections": [{"title": "Géneros", "rows": [
-                    {"id": "1", "title": "Masculino"},
-                    {"id": "2", "title": "Femenino"},
-                    {"id": "3", "title": "Otro"},
-                    {"id": "4", "title": "Prefiero no decir"}
-                ]}]
-            }
-        }
-        ctx["interactive_fallback"] = interactive_data
-
-    elif state == "WAITING_REFERRAL_GENDER":
-        mapping = {"1": "Masculino", "2": "Femenino", "3": "Otro", "4": "Prefiero no decir"}
-        if msg in mapping:
-            ctx["ref_gender"] = mapping[msg]
-            reply = "¿Qué edad tienes? (Escribe el número, por ejemplo: 25)"
-            session.state = "WAITING_REFERRAL_AGE"
-            ctx["invalid_attempts"] = 0
-        else:
-            reply, interactive_data, ctx = handle_invalid("Opción inválida.", "", ctx.get("interactive_fallback"))
-
-    elif state == "WAITING_REFERRAL_NEIGHBORHOOD":
-        ctx["ref_neighborhood"] = message_raw.strip()
-        reply = "¿En qué barrio vives?"
-        session.state = "WAITING_REFERRAL_NEIGHBORHOOD"
-
-    # --- NUEVOS ESTADOS: FLUJO DE CENSO ---
-    
-    elif state == "WAITING_CENSO_CONFIRMATION":
-        if msg in ["1", "si", "sí", "sí, es correcto"]:
-            session.state = "WAITING_PHOTO_1"
-            reply = "¡Perfecto! Por favor, envíame la *primera foto* de la entrega."
-            db.commit()
-        elif msg in ["2", "no", "volver a digitar"]:
-            session.state = "IDLE"
-            reply = "Entendido. Por favor, escribe de nuevo el censo (ej: censo 1015)."
-            ctx = {}
-            session.context_data = "{}"
-            db.commit()
-        else:
-            reply, interactive_data, ctx = handle_invalid("Opción inválida.", "1. Sí\n2. No", ctx.get("interactive_fallback"))
-
-    elif state == "WAITING_PHOTO_1":
-        if media_id:
-            censo_num = ctx.get("census_number", "unknown")
-            filename = f"Censo_{censo_num}_1.jpg"
-            temp_path = os.path.join(os.path.dirname(__file__), f"temp_{phone}_1.jpg")
+        elif state == "WAITING_REFERRAL_PHONE":
+            ref_phone = "".join(filter(str.isdigit, msg))
+            if len(ref_phone) >= 10:
+                if ref_phone.startswith("57") and len(ref_phone) == 12:
+                    ref_phone = ref_phone[2:]
+                
+                six_months_ago = datetime.now() - timedelta(days=180)
+                calls_sql = text("SELECT id FROM calls WHERE phone_number = :p AND created_at >= :d")
+                recent_call = db_users.execute(calls_sql, {"p": ref_phone, "d": six_months_ago}).first()
             
-            if media_handler.download_whatsapp_media(media_id, temp_path):
-                drive_id = media_handler.upload_to_drive(temp_path, filename)
-                if drive_id:
-                    ctx["photos"].append(drive_id)
-                    session.context_data = json.dumps(ctx)
-                    session.state = "WAITING_PHOTO_2_OR_FINISH"
-                    reply = "✅ Primera foto recibida y guardada en Drive.\n\n¿Deseas enviar una *segunda foto* o ya terminaste?"
-                    interactive_data = {
-                        "type": "button",
-                        "body": {"text": reply},
-                        "action": {
-                            "buttons": [
-                                {"type": "reply", "reply": {"id": "1", "title": "Enviar otra"}},
-                                {"type": "reply", "reply": {"id": "2", "title": "Terminar"}}
-                            ]
-                        }
-                    }
-                    ctx["interactive_fallback"] = interactive_data
-                    db.commit()
-                    if os.path.exists(temp_path): os.remove(temp_path)
+                if recent_call:
+                    reply = "Gracias, pero vemos que ya participaste en un estudio con nosotros en los últimos 6 meses. Por el momento no podemos registrarte de nuevo. ¡Hasta luego!"
+                    db.delete(session)
                 else:
-                    reply = "⚠️ Error al subir a Drive. Intenta de nuevo."
+                    ctx["ref_phone"] = ref_phone
+                    reply = "¡Perfecto! ¿Cuál es tu Nombre y Apellido completo?"
+                    session.state = "WAITING_REFERRAL_NAME"
             else:
-                reply = "⚠️ Error al descargar imagen. Reintenta."
-        else:
-            reply = "📷 Por favor, envía la foto de la entrega."
+                reply = "⚠️ Por favor escribe un número válido de al menos 10 dígitos."
 
-    elif state == "WAITING_PHOTO_2_OR_FINISH":
-        if media_id:
-            censo_num = ctx.get("census_number", "unknown")
-            filename = f"Censo_{censo_num}_2.jpg"
-            temp_path = os.path.join(os.path.dirname(__file__), f"temp_{phone}_2.jpg")
-            
-            if media_handler.download_whatsapp_media(media_id, temp_path):
-                drive_id = media_handler.upload_to_drive(temp_path, filename)
-                if drive_id:
-                    ctx["photos"].append(drive_id)
-                    # Terminar flujo
-                    finish_msg = finalize_census_flow(db, phone, ctx)
-                    if os.path.exists(temp_path): os.remove(temp_path)
-                    return finish_msg, None
-                else:
-                    reply = "⚠️ Error al subir a Drive. Intenta de nuevo."
-            else:
-                reply = "⚠️ Error al descargar imagen. Reintenta."
-        elif msg in ["2", "terminar"]:
-            finish_msg = finalize_census_flow(db, phone, ctx)
-            return finish_msg, None
-        else:
-            reply, interactive_data, ctx = handle_invalid("Opción inválida.", "1. Enviar otra\n2. Terminar", ctx.get("interactive_fallback"))
-
-    elif state == "WAITING_REFERRAL_AGE":
-        if msg.isdigit() and 10 <= int(msg) <= 100:
-            ctx["ref_age"] = int(msg)
-            reply = "¿En qué ciudad resides?"
-            session.state = "WAITING_REFERRAL_CITY"
+        elif state == "WAITING_REFERRAL_NAME":
+            ctx["ref_name"] = message_raw.strip()
+            reply = "Gracias. Selecciona tu Género:"
+            session.state = "WAITING_REFERRAL_GENDER"
             ctx["invalid_attempts"] = 0
             interactive_data = {
                 "type": "list",
                 "body": {"text": reply},
                 "action": {
                     "button": "Ver Opciones",
-                    "sections": [{"title": "Ciudades", "rows": [
-                        {"id": "1", "title": "Bogotá"},
-                        {"id": "2", "title": "Barranquilla"},
-                        {"id": "3", "title": "Cali"},
-                        {"id": "4", "title": "Medellín"},
-                        {"id": "5", "title": "Bucaramanga"},
-                        {"id": "6", "title": "Otra"}
+                    "sections": [{"title": "Géneros", "rows": [
+                        {"id": "1", "title": "Masculino"},
+                        {"id": "2", "title": "Femenino"},
+                        {"id": "3", "title": "Otro"},
+                        {"id": "4", "title": "Prefiero no decir"}
                     ]}]
                 }
             }
             ctx["interactive_fallback"] = interactive_data
-        else:
-            reply, interactive_data, ctx = handle_invalid("Por favor escribe tu edad en números validos.", "", ctx.get("interactive_fallback"))
 
-    elif state == "WAITING_REFERRAL_CITY":
-        mapping = {"1": "Bogotá", "2": "Barranquilla", "3": "Cali", "4": "Medellín", "5": "Bucaramanga"}
-        if msg in mapping:
-            ctx["ref_city"] = mapping[msg]
+        elif state == "WAITING_REFERRAL_GENDER":
+            mapping = {"1": "Masculino", "2": "Femenino", "3": "Otro", "4": "Prefiero no decir"}
+            if msg in mapping:
+                ctx["ref_gender"] = mapping[msg]
+                reply = "¿Qué edad tienes? (Escribe el número, por ejemplo: 25)"
+                session.state = "WAITING_REFERRAL_AGE"
+                ctx["invalid_attempts"] = 0
+            else:
+                reply, interactive_data, ctx = handle_invalid("Opción inválida.", "", ctx.get("interactive_fallback"))
+
+        elif state == "WAITING_REFERRAL_NEIGHBORHOOD":
+            ctx["ref_neighborhood"] = message_raw.strip()
             reply = "¿En qué barrio vives?"
             session.state = "WAITING_REFERRAL_NEIGHBORHOOD"
-        elif msg == "6":
-            reply = "¿En qué otra ciudad vives? (Escríbela brevemente):"
-            session.state = "WAITING_REFERRAL_CITY_OTHER"
-        else:
-            reply, interactive_data, ctx = handle_invalid("Opción inválida.", "", ctx.get("interactive_fallback"))
 
-    elif state == "WAITING_REFERRAL_CITY_OTHER":
-        ctx["ref_city"] = message_raw.strip()
-        reply = "¿En qué barrio vives?"
-        session.state = "WAITING_REFERRAL_NEIGHBORHOOD"
+        # --- NUEVOS ESTADOS: FLUJO DE CENSO ---
+    
+        elif state == "WAITING_CENSO_CONFIRMATION":
+            if msg in ["1", "si", "sí", "sí, es correcto"]:
+                session.state = "WAITING_PHOTO_1"
+                reply = "¡Perfecto! Por favor, envíame la *primera foto* de la entrega."
+                db.commit()
+            elif msg in ["2", "no", "volver a digitar"]:
+                session.state = "IDLE"
+                reply = "Entendido. Por favor, escribe de nuevo el censo (ej: censo 1015)."
+                ctx = {}
+                session.context_data = "{}"
+                db.commit()
+            else:
+                reply, interactive_data, ctx = handle_invalid("Opción inválida.", "1. Sí\n2. No", ctx.get("interactive_fallback"))
 
-    elif state == "WAITING_REFERRAL_NEIGHBORHOOD":
-        ctx["ref_neighborhood"] = message_raw.strip()
-        reply = "¿Cuál es tu dirección de residencia?"
-        session.state = "WAITING_REFERRAL_ADDRESS"
+        elif state == "WAITING_PHOTO_1":
+            if media_id:
+                censo_num = ctx.get("census_number", "unknown")
+                filename = f"Censo_{censo_num}_1.jpg"
+                temp_path = os.path.join(os.path.dirname(__file__), f"temp_{phone}_1.jpg")
+            
+                if media_handler.download_whatsapp_media(media_id, temp_path):
+                    drive_id = media_handler.upload_to_drive(temp_path, filename)
+                    if drive_id:
+                        ctx["photos"].append(drive_id)
+                        session.context_data = json.dumps(ctx)
+                        session.state = "WAITING_PHOTO_2_OR_FINISH"
+                        reply = "✅ Primera foto recibida y guardada en Drive.\n\n¿Deseas enviar una *segunda foto* o ya terminaste?"
+                        interactive_data = {
+                            "type": "button",
+                            "body": {"text": reply},
+                            "action": {
+                                "buttons": [
+                                    {"type": "reply", "reply": {"id": "1", "title": "Enviar otra"}},
+                                    {"type": "reply", "reply": {"id": "2", "title": "Terminar"}}
+                                ]
+                            }
+                        }
+                        ctx["interactive_fallback"] = interactive_data
+                        db.commit()
+                        if os.path.exists(temp_path): os.remove(temp_path)
+                    else:
+                        reply = "⚠️ Error al subir a Drive. Intenta de nuevo."
+                else:
+                    reply = "⚠️ Error al descargar imagen. Reintenta."
+            else:
+                reply = "📷 Por favor, envía la foto de la entrega."
 
-    elif state == "WAITING_REFERRAL_ADDRESS":
-        ctx["ref_address"] = message_raw.strip()
-        reply = "De acuerdo con la ley de protección de datos de Colombia, ¿Autorizas voluntariamente que AZ Marketing conserve estos datos para ser contactado en futuros estudios?"
-        session.state = "WAITING_REFERRAL_CONSENT"
-        ctx["invalid_attempts"] = 0
-        interactive_data = {
-            "type": "button",
-            "body": {"text": reply},
-            "action": {
-                "buttons": [
-                    {"type": "reply", "reply": {"id": "1", "title": "Sí, acepto"}},
-                    {"type": "reply", "reply": {"id": "2", "title": "No acepto"}}
-                ]
+        elif state == "WAITING_PHOTO_2_OR_FINISH":
+            if media_id:
+                censo_num = ctx.get("census_number", "unknown")
+                filename = f"Censo_{censo_num}_2.jpg"
+                temp_path = os.path.join(os.path.dirname(__file__), f"temp_{phone}_2.jpg")
+            
+                if media_handler.download_whatsapp_media(media_id, temp_path):
+                    drive_id = media_handler.upload_to_drive(temp_path, filename)
+                    if drive_id:
+                        ctx["photos"].append(drive_id)
+                        # Terminar flujo
+                        finish_msg = finalize_census_flow(db, phone, ctx)
+                        if os.path.exists(temp_path): os.remove(temp_path)
+                        return finish_msg, None
+                    else:
+                        reply = "⚠️ Error al subir a Drive. Intenta de nuevo."
+                else:
+                    reply = "⚠️ Error al descargar imagen. Reintenta."
+            elif msg in ["2", "terminar"]:
+                finish_msg = finalize_census_flow(db, phone, ctx)
+                return finish_msg, None
+            else:
+                reply, interactive_data, ctx = handle_invalid("Opción inválida.", "1. Enviar otra\n2. Terminar", ctx.get("interactive_fallback"))
+
+        elif state == "WAITING_REFERRAL_AGE":
+            if msg.isdigit() and 10 <= int(msg) <= 100:
+                ctx["ref_age"] = int(msg)
+                reply = "¿En qué ciudad resides?"
+                session.state = "WAITING_REFERRAL_CITY"
+                ctx["invalid_attempts"] = 0
+                interactive_data = {
+                    "type": "list",
+                    "body": {"text": reply},
+                    "action": {
+                        "button": "Ver Opciones",
+                        "sections": [{"title": "Ciudades", "rows": [
+                            {"id": "1", "title": "Bogotá"},
+                            {"id": "2", "title": "Barranquilla"},
+                            {"id": "3", "title": "Cali"},
+                            {"id": "4", "title": "Medellín"},
+                            {"id": "5", "title": "Bucaramanga"},
+                            {"id": "6", "title": "Otra"}
+                        ]}]
+                    }
+                }
+                ctx["interactive_fallback"] = interactive_data
+            else:
+                reply, interactive_data, ctx = handle_invalid("Por favor escribe tu edad en números validos.", "", ctx.get("interactive_fallback"))
+
+        elif state == "WAITING_REFERRAL_CITY":
+            mapping = {"1": "Bogotá", "2": "Barranquilla", "3": "Cali", "4": "Medellín", "5": "Bucaramanga"}
+            if msg in mapping:
+                ctx["ref_city"] = mapping[msg]
+                reply = "¿En qué barrio vives?"
+                session.state = "WAITING_REFERRAL_NEIGHBORHOOD"
+            elif msg == "6":
+                reply = "¿En qué otra ciudad vives? (Escríbela brevemente):"
+                session.state = "WAITING_REFERRAL_CITY_OTHER"
+            else:
+                reply, interactive_data, ctx = handle_invalid("Opción inválida.", "", ctx.get("interactive_fallback"))
+
+        elif state == "WAITING_REFERRAL_CITY_OTHER":
+            ctx["ref_city"] = message_raw.strip()
+            reply = "¿En qué barrio vives?"
+            session.state = "WAITING_REFERRAL_NEIGHBORHOOD"
+
+        elif state == "WAITING_REFERRAL_NEIGHBORHOOD":
+            ctx["ref_neighborhood"] = message_raw.strip()
+            reply = "¿Cuál es tu dirección de residencia?"
+            session.state = "WAITING_REFERRAL_ADDRESS"
+
+        elif state == "WAITING_REFERRAL_ADDRESS":
+            ctx["ref_address"] = message_raw.strip()
+            reply = "De acuerdo con la ley de protección de datos de Colombia, ¿Autorizas voluntariamente que AZ Marketing conserve estos datos para ser contactado en futuros estudios?"
+            session.state = "WAITING_REFERRAL_CONSENT"
+            ctx["invalid_attempts"] = 0
+            interactive_data = {
+                "type": "button",
+                "body": {"text": reply},
+                "action": {
+                    "buttons": [
+                        {"type": "reply", "reply": {"id": "1", "title": "Sí, acepto"}},
+                        {"type": "reply", "reply": {"id": "2", "title": "No acepto"}}
+                    ]
+                }
             }
-        }
-        ctx["interactive_fallback"] = interactive_data
+            ctx["interactive_fallback"] = interactive_data
 
-    elif state == "WAITING_REFERRAL_CONSENT":
-        if msg == "1" or msg == "si":
-            referral = models.BotReferral(
-                referral_phone=ctx.get("ref_phone"),
-                referrer_phone=phone,
-                full_name=ctx.get("ref_name"),
-                gender=ctx.get("ref_gender"),
-                age=ctx.get("ref_age"),
-                city=ctx.get("ref_city"),
-                neighborhood=ctx.get("ref_neighborhood"),
-                address=ctx.get("ref_address"),
-                consent=True
-            )
-            db.add(referral)
-            db.commit()
-            reply = "¡Tus datos han sido registrados con éxito! Muchas gracias por tu tiempo, te contactaremos cuando tengamos un estudio adecuado para tu perfil. ¡Hasta luego!"
-            db.delete(session)
-        elif msg == "2" or msg == "no":
-            reply = "Entendido, no guardaremos tus datos. ¡Gracias por comunicarte con AZ Marketing, hasta luego!"
-            db.delete(session)
-        else:
-            reply, interactive_data, ctx = handle_invalid("Opción inválida.", "1. Sí, acepto\n2. No acepto", ctx.get("interactive_fallback"))
+        elif state == "WAITING_REFERRAL_CONSENT":
+            if msg == "1" or msg == "si":
+                referral = models.BotReferral(
+                    referral_phone=ctx.get("ref_phone"),
+                    referrer_phone=phone,
+                    full_name=ctx.get("ref_name"),
+                    gender=ctx.get("ref_gender"),
+                    age=ctx.get("ref_age"),
+                    city=ctx.get("ref_city"),
+                    neighborhood=ctx.get("ref_neighborhood"),
+                    address=ctx.get("ref_address"),
+                    consent=True
+                )
+                db.add(referral)
+                db.commit()
+                reply = "¡Tus datos han sido registrados con éxito! Muchas gracias por tu tiempo, te contactaremos cuando tengamos un estudio adecuado para tu perfil. ¡Hasta luego!"
+                db.delete(session)
+            elif msg == "2" or msg == "no":
+                reply = "Entendido, no guardaremos tus datos. ¡Gracias por comunicarte con AZ Marketing, hasta luego!"
+                db.delete(session)
+            else:
+                reply, interactive_data, ctx = handle_invalid("Opción inválida.", "1. Sí, acepto\n2. No acepto", ctx.get("interactive_fallback"))
     # End of if not is_media_unsupported
 
     session.context_data = json.dumps(ctx)
