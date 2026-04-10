@@ -1410,7 +1410,7 @@ def build_study_report(db, study_code):
     def calc_visual_len(s):
         # Emojis on WhatsApp monospace act approximately like 2 character spaces wide.
         # len("🟡") counts as 1. So we add 1 for every emoji to simulate visual width.
-        return len(s) + s.count('🟡')
+        return len(s) + s.count('🟡') + s.count('👨') + s.count('👩')
 
     col_widths = {}
     for fn in ordered_first_nodes:
@@ -1427,39 +1427,43 @@ def build_study_report(db, study_code):
                         max_len = calc_visual_len(cell_str)
             col_widths[col_key] = max(max_len, 3)
 
-    head1 = f"|{' ' * max_row_len}|"
-    head2 = f"|{'Cat.'.ljust(max_row_len)}|"
-    sep = f"+{'-' * max_row_len}+"
-    
-    for i, fn in enumerate(ordered_first_nodes):
-        fn_inner_len = sum(col_widths[(fn, ln)] for ln in ordered_leaf_nodes[fn]) + len(ordered_leaf_nodes[fn]) - 1
-        fn_name = fn[:fn_inner_len].center(fn_inner_len)
+    for fn in ordered_first_nodes:
+        num_cols = len(ordered_leaf_nodes[fn])
         
-        is_last_fn = (i == len(ordered_first_nodes) - 1)
-        boundary_char = "|" if is_last_fn else "||"
-        sep_boundary = "+" if is_last_fn else "++"
+        # Inner length: cols (value + 2 spaces padding left/right) + inner separators " | " (length 3)
+        fn_inner_len = sum((col_widths[(fn, ln)] + 2) for ln in ordered_leaf_nodes[fn]) + (num_cols - 1) * 3
         
-        head1 += f"{fn_name}{boundary_char}"
+        visual_fn_len = calc_visual_len(fn)
+        total_spaces = fn_inner_len - visual_fn_len
+        left_spaces = total_spaces // 2
+        right_spaces = total_spaces - left_spaces
+        fn_name = (" " * left_spaces) + fn + (" " * right_spaces)
+        
+        head1 = f"| {' ' * max_row_len} |"
+        head2 = f"| {'Cat.'.ljust(max_row_len)} |"
+        sep = f"+-{'-' * max_row_len}-+"
+        
+        head1 += f"{fn_name}|"
         
         for j, ln in enumerate(ordered_leaf_nodes[fn]):
             is_last_ln = (j == len(ordered_leaf_nodes[fn]) - 1)
             
+            b_char = "|" if is_last_ln else " | "
+            s_char = "+" if is_last_ln else "-+-"
+            
             padding = col_widths[(fn, ln)] - calc_visual_len(ln)
-            head2 += f"{ln}{' ' * padding}{boundary_char if is_last_ln else '|'}"
-            sep += f"{'-' * col_widths[(fn, ln)]}{sep_boundary if is_last_ln else '+'}"
+            head2 += f" {ln}{' ' * padding} {b_char}"
+            sep += f"-{'-' * col_widths[(fn, ln)]}-{s_char}"
 
-    matrix_msg += f"```\n{sep}\n{head1}\n{head2}\n{sep}\n"
-    
-    for r in sorted_rows:
-        r_str = r[:max_row_len].ljust(max_row_len)
-        line = f"|{r_str}|"
+        matrix_msg += f"```\n{sep}\n{head1}\n{head2}\n{sep}\n"
         
-        for i, fn in enumerate(ordered_first_nodes):
-            is_last_fn = (i == len(ordered_first_nodes) - 1)
-            boundary_char = "|" if is_last_fn else "||"
+        for r in sorted_rows:
+            r_str = r[:max_row_len].ljust(max_row_len)
+            line = f"| {r_str} |"
             
             for j, ln in enumerate(ordered_leaf_nodes[fn]):
                 is_last_ln = (j == len(ordered_leaf_nodes[fn]) - 1)
+                b_char = "|" if is_last_ln else " | "
                 
                 if fn in data_map[r] and ln in data_map[r][fn]:
                     cdata = data_map[r][fn][ln]
@@ -1470,11 +1474,11 @@ def build_study_report(db, study_code):
                     cell_str = "-"
                     
                 padding = col_widths[(fn, ln)] - calc_visual_len(cell_str)
-                line += f"{cell_str}{' ' * padding}{boundary_char if is_last_ln else '|'}"
+                line += f" {cell_str}{' ' * padding} {b_char}"
                 
-        matrix_msg += f"{line}\n"
-        
-    matrix_msg += f"{sep}\n```\n"
+            matrix_msg += f"{line}\n{sep}\n"
+            
+        matrix_msg += f"```\n\n"
         
     daily_stats = db.query(
         models.QuotaSubmission.phone_number,
