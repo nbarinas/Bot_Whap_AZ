@@ -1360,7 +1360,10 @@ def build_study_report(db, study_code):
     
     matrix_msg = f"📊 *Estado General: {study_code.upper()}*\n"
     
-    grouped_quotas = {}
+    col_tree = {} # { first_node: set(leaf_node) }
+    row_keys = set()
+    data_map = {} # { middle_str: { first_node: { leaf_node: {...} } } }
+
     for q in all_study_quotas:
         parts = q.category.split(' | ') if '|' in q.category else [q.category]
         parts.append(q.value)
@@ -1368,16 +1371,110 @@ def build_study_report(db, study_code):
         
         if not path_tuple:
             continue
+            
         first_node = path_tuple[0]
-        rest = " | ".join(path_tuple[1:])
-        if first_node not in grouped_quotas:
-            grouped_quotas[first_node] = []
+        if len(path_tuple) > 2:
+            middle_str = " | ".join(path_tuple[1:-1])
+            leaf_node = path_tuple[-1]
+        elif len(path_tuple) == 2:
+            middle_str = "-"
+            leaf_node = path_tuple[-1]
+        else: # length 1
+            middle_str = "-"
+            leaf_node = path_tuple[0]
+            
+        if first_node not in col_tree:
+            col_tree[first_node] = set()
+        col_tree[first_node].add(leaf_node)
         
-        grouped_quotas[first_node].append(f"  {rest}: {q.current_count}/{q.target_count}")
+        row_keys.add(middle_str)
+        
+        if middle_str not in data_map:
+            data_map[middle_str] = {}
+        if first_node not in data_map[middle_str]:
+            data_map[middle_str][first_node] = {}
+            
+        data_map[middle_str][first_node][leaf_node] = {
+            'current': q.current_count,
+            'target': q.target_count
+        }
+
+    # Order nodes
+    ordered_first_nodes = sorted(list(col_tree.keys()))
+    ordered_leaf_nodes = {fn: sorted(list(col_tree[fn])) for fn in ordered_first_nodes}
+    sorted_rows = sorted(list(row_keys))
     
-    for group_name, lines in grouped_quotas.items():
-        matrix_msg += f"\n*{group_name}*\n"
-        matrix_msg += "\n".join(lines)
+    max_row_len = max([len(r) for r in sorted_rows] + [4])
+    max_row_len = min(max_row_len, 10)
+    
+    def calc_visual_len(s):
+        # Emojis on WhatsApp monospace act approximately like 2 character spaces wide.
+        # len("🟡") counts as 1. So we add 1 for every emoji to simulate visual width.
+        return len(s) + s.count('🟡')
+
+    col_widths = {}
+    for fn in ordered_first_nodes:
+        for ln in ordered_leaf_nodes[fn]:
+            col_key = (fn, ln)
+            max_len = calc_visual_len(ln)
+            for r in sorted_rows:
+                if fn in data_map[r] and ln in data_map[r][fn]:
+                    cdata = data_map[r][fn][ln]
+                    cell_str = f"{cdata['current']}/{cdata['target']}"
+                    if cdata['current'] >= cdata['target']:
+                        cell_str += "🟡"
+                    if calc_visual_len(cell_str) > max_len:
+                        max_len = calc_visual_len(cell_str)
+            col_widths[col_key] = max(max_len, 3)
+
+    head1 = f"|{' ' * max_row_len}|"
+    head2 = f"|{'Cat.'.ljust(max_row_len)}|"
+    sep = f"+{'-' * max_row_len}+"
+    
+    for i, fn in enumerate(ordered_first_nodes):
+        fn_inner_len = sum(col_widths[(fn, ln)] for ln in ordered_leaf_nodes[fn]) + len(ordered_leaf_nodes[fn]) - 1
+        fn_name = fn[:fn_inner_len].center(fn_inner_len)
+        
+        is_last_fn = (i == len(ordered_first_nodes) - 1)
+        boundary_char = "|" if is_last_fn else "||"
+        sep_boundary = "+" if is_last_fn else "++"
+        
+        head1 += f"{fn_name}{boundary_char}"
+        
+        for j, ln in enumerate(ordered_leaf_nodes[fn]):
+            is_last_ln = (j == len(ordered_leaf_nodes[fn]) - 1)
+            
+            padding = col_widths[(fn, ln)] - calc_visual_len(ln)
+            head2 += f"{ln}{' ' * padding}{boundary_char if is_last_ln else '|'}"
+            sep += f"{'-' * col_widths[(fn, ln)]}{sep_boundary if is_last_ln else '+'}"
+
+    matrix_msg += f"```\n{sep}\n{head1}\n{head2}\n{sep}\n"
+    
+    for r in sorted_rows:
+        r_str = r[:max_row_len].ljust(max_row_len)
+        line = f"|{r_str}|"
+        
+        for i, fn in enumerate(ordered_first_nodes):
+            is_last_fn = (i == len(ordered_first_nodes) - 1)
+            boundary_char = "|" if is_last_fn else "||"
+            
+            for j, ln in enumerate(ordered_leaf_nodes[fn]):
+                is_last_ln = (j == len(ordered_leaf_nodes[fn]) - 1)
+                
+                if fn in data_map[r] and ln in data_map[r][fn]:
+                    cdata = data_map[r][fn][ln]
+                    cell_str = f"{cdata['current']}/{cdata['target']}"
+                    if cdata['current'] >= cdata['target']:
+                        cell_str += "🟡"
+                else:
+                    cell_str = "-"
+                    
+                padding = col_widths[(fn, ln)] - calc_visual_len(cell_str)
+                line += f"{cell_str}{' ' * padding}{boundary_char if is_last_ln else '|'}"
+                
+        matrix_msg += f"{line}\n"
+        
+    matrix_msg += f"{sep}\n```\n"
         
     daily_stats = db.query(
         models.QuotaSubmission.phone_number,
