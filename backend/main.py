@@ -878,72 +878,9 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             elif msg == "3":
                 # View current matrix
                 study_code = ctx.get("study_code")
-                report = build_study_report(db, study_code)
-                
-                # --- NEW: Quota Image Logic ---
-                try:
-                    # Get components for the image (extracting from DB again or using report data)
-                    all_study_quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
-                    
-                    col_tree = {} # { first_node: set(leaf_node) }
-                    row_keys = set()
-                    data_map = {} # { middle_str: { first_node: { leaf_node: {...} } } }
-
-                    for q in all_study_quotas:
-                        parts = q.category.split(' | ') if '|' in q.category else [q.category]
-                        parts.append(q.value)
-                        path_tuple = tuple(p.strip() for p in parts if p.strip())
-                        if not path_tuple: continue
-                        
-                        first_node = path_tuple[0]
-                        if len(path_tuple) > 2:
-                            middle_str = " | ".join(path_tuple[1:-1])
-                            leaf_node = path_tuple[-1]
-                        elif len(path_tuple) == 2:
-                            middle_str = "-"
-                            leaf_node = path_tuple[-1]
-                        else:
-                            middle_str = "-"
-                            leaf_node = path_tuple[0]
-                        
-                        if first_node not in col_tree: col_tree[first_node] = set()
-                        col_tree[first_node].add(leaf_node)
-                        row_keys.add(middle_str)
-                        if middle_str not in data_map: data_map[middle_str] = {}
-                        if first_node not in data_map[middle_str]: data_map[middle_str][first_node] = {}
-                        data_map[middle_str][first_node][leaf_node] = {'current': q.current_count, 'target': q.target_count}
-
-                    ordered_first_nodes = sorted(list(col_tree.keys()))
-                    ordered_leaf_nodes = {fn: sorted(list(col_tree[fn])) for fn in ordered_first_nodes}
-                    sorted_rows = sorted(list(row_keys))
-
-                    # 1. Render Image
-                    img_filename = f"quotas_{study_code}_{phone}.png"
-                    img_path = os.path.join(BASE_DIR, img_filename)
-                    render_utils.generate_quota_table_image(
-                        data_map, ordered_first_nodes, ordered_leaf_nodes, sorted_rows, study_code, img_path
-                    )
-                    
-                    # 2. Upload to Meta
-                    print(f"DEBUG: Generated image {img_path}. Uploading...")
-                    media_id = upload_media.upload_media(img_path, "image/png")
-                    print(f"DEBUG: Media Upload Result ID: {media_id}")
-                    
-                    if media_id:
-                        # 3. Send Image
-                        print(f"DEBUG: Sending media_id {media_id} to {phone}")
-                        send_whatsapp_media(phone, "image", media_id, f"📊 Cuotas de *{study_code.upper()}*")
-                        reply = "Te acabo de enviar la tabla de cuotas en formato imagen. 👆"
-                    else:
-                        print("DEBUG: Media ID was None, falling back to text report.")
-                        reply = report # Fallback to text if upload fails
-                        
-                    # Clean up
-                    if os.path.exists(img_path):
-                        os.remove(img_path)
-                except Exception as e:
-                    print(f"Error generating quota image: {e}")
-                    reply = report
+                # Just send to the requester
+                send_quota_report_to_agents(db, study_code, [phone], f"📊 Estado de Cuotas: *{study_code.upper()}*")
+                reply = "Te acabo de enviar la tabla de cuotas actualizada. 👆"
                 
                 session.state = "IDLE"
                 ctx = {}
@@ -1412,6 +1349,101 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
     return reply, interactive_data
 
 
+def send_quota_report_to_agents(db, study_code, phones, caption=""):
+    """
+    Helper to send a visual quota report to one or more agents. 
+    Renders and uploads once, spreads to all.
+    """
+    try:
+        # Import inside to avoid circular deps or load order issues if any
+        from . import models, render_utils, upload_media
+        
+        # 1. Get components for the image
+        all_study_quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
+        if not all_study_quotas:
+            print(f"DEBUG: No quotas found for study {study_code}")
+            return
+            
+        col_tree = {} # { first_node: set(leaf_node) }
+        row_keys = set()
+        data_map = {} # { middle_str: { first_node: { leaf_node: {...} } } }
+
+        for q in all_study_quotas:
+            parts = q.category.split(' | ') if '|' in q.category else [q.category]
+            parts.append(q.value)
+            path_tuple = tuple(p.strip() for p in parts if p.strip())
+            if not path_tuple: continue
+            
+            first_node = path_tuple[0]
+            if len(path_tuple) > 2:
+                middle_str = " | ".join(path_tuple[1:-1])
+                leaf_node = path_tuple[-1]
+            elif len(path_tuple) == 2:
+                middle_str = "-"
+                leaf_node = path_tuple[-1]
+            else:
+                middle_str = "-"
+                leaf_node = path_tuple[0]
+            
+            if first_node not in col_tree: col_tree[first_node] = set()
+            col_tree[first_node].add(leaf_node)
+            row_keys.add(middle_str)
+            if middle_str not in data_map: data_map[middle_str] = {}
+            if first_node not in data_map[middle_str]: data_map[middle_str][first_node] = {}
+            data_map[middle_str][first_node][leaf_node] = {'current': q.current_count, 'target': q.target_count}
+
+        ordered_first_nodes = sorted(list(col_tree.keys()))
+        ordered_leaf_nodes = {fn: sorted(list(col_tree[fn])) for fn in ordered_first_nodes}
+        sorted_rows = sorted(list(row_keys))
+
+        # 2. Render Image
+        img_filename = f"broadcast_{study_code}.png"
+        img_path = os.path.join(BASE_DIR, img_filename)
+        render_utils.generate_quota_table_image(
+            data_map, ordered_first_nodes, ordered_leaf_nodes, sorted_rows, study_code, img_path
+        )
+        
+        # 3. Upload to Meta
+        print(f"DEBUG: Uploading broadcast image for {study_code}...")
+        media_id = upload_media.upload_media(img_path, "image/png")
+        
+        if media_id:
+            # 4. Broadcast to all recipients
+            cap = caption if caption else f"📊 Cuotas Actualizadas: *{study_code.upper()}*"
+            for phone in phones:
+                try:
+                    send_whatsapp_media(phone, "image", media_id, cap)
+                except Exception as ex:
+                    print(f"Error broadcasting to {phone}: {ex}")
+        
+        # Clean up
+        if os.path.exists(img_path):
+            os.remove(img_path)
+            
+    except Exception as e:
+        print(f"Error in send_quota_report_to_agents: {e}")
+
+def get_daily_active_phones_for_study(db, study_code):
+    """
+    Returns unique phone numbers that have submitted surveys for the study today.
+    """
+    from datetime import date, datetime
+    today = date.today()
+    start_of_day = datetime(today.year, today.month, today.day)
+    
+    # Identify quotas belonging to this study
+    quota_ids_subquery = db.query(models.BotQuota.id).filter(models.BotQuota.study_code == study_code).subquery()
+    
+    active_phones = db.query(
+        models.QuotaSubmission.phone_number
+    ).filter(
+        models.QuotaSubmission.bot_quota_id.in_(quota_ids_subquery),
+        models.QuotaSubmission.is_deleted == 0,
+        models.QuotaSubmission.submitted_at >= start_of_day
+    ).distinct().all()
+    
+    return [p[0] for p in active_phones if p[0]]
+
 def build_study_report(db, study_code):
     from sqlalchemy import func
     from datetime import datetime, date
@@ -1608,10 +1640,16 @@ def compute_next_bot_step_interactive(db, ctx, phone="") -> tuple[str, str, dict
         db.add(sub)
         quota.current_count += 1
         
-        report = build_study_report(db, study_code)
+        # Broadcast update to everyone active today
+        active_phones = get_daily_active_phones_for_study(db, study_code)
+        # Ensure the current reporter is included if not already in the active list 
+        # (they should be since we just committed the submission)
+        if phone not in active_phones:
+            active_phones.append(phone)
+            
+        send_quota_report_to_agents(db, study_code, active_phones, f"📈 ¡Nueva encuesta guardada por {phone}!\nFaltan {quota.target_count - quota.current_count} para esta cuota.")
         
-        base_reply = f"✅ ¡Guardado! Faltan {quota.target_count - quota.current_count} encuestas de esta cuota."
-        return f"{base_reply}{report}", "IDLE", None
+        return f"✅ ¡Guardado! Faltan {quota.target_count - quota.current_count} encuestas de esta cuota.", "IDLE", None
         
     # Not a leaf, gather next layer options
     next_options = []
