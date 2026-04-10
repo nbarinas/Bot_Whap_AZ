@@ -24,25 +24,57 @@ def generate_quota_table_image(data_map, ordered_first_nodes, ordered_leaf_nodes
     PRIMARY_LABEL_COLOR = (32, 33, 36)
     
     # Font setup
-    try:
-        # Standard paths on Windows
-        font_path = "C:\\Windows\\Fonts\\arial.ttf"
-        font_bold_path = "C:\\Windows\\Fonts\\arialbd.ttf"
-        
-        font = ImageFont.truetype(font_path, 14)
-        bold_font = ImageFont.truetype(font_bold_path, 14)
-        title_font = ImageFont.truetype(font_bold_path, 20)
-        footer_font = ImageFont.truetype(font_path, 11)
-    except:
-        # Fallback for other OS or if fonts missing
+    font = None
+    bold_font = None
+    title_font = None
+    footer_font = None
+
+    # Try common font paths for both Windows and Linux
+    possible_fonts = [
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf"
+    ]
+    possible_bolds = [
+        "C:\\Windows\\Fonts\\arialbd.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"
+    ]
+
+    for fp in possible_fonts:
+        if os.path.exists(fp):
+            try:
+                font = ImageFont.truetype(fp, 14)
+                footer_font = ImageFont.truetype(fp, 11)
+                break
+            except: continue
+    
+    for bp in possible_bolds:
+        if os.path.exists(bp):
+            try:
+                bold_font = ImageFont.truetype(bp, 14)
+                title_font = ImageFont.truetype(bp, 20)
+                break
+            except: continue
+
+    if font is None:
+        print("Warning: No TTF fonts found. Using default font.")
         font = ImageFont.load_default()
+        footer_font = ImageFont.load_default()
+    if bold_font is None:
         bold_font = ImageFont.load_default()
         title_font = ImageFont.load_default()
-        footer_font = ImageFont.load_default()
 
     def get_text_size(text, f):
-        box = f.getbbox(str(text))
-        return box[2] - box[0], box[3] - box[1]
+        try:
+            # Pillow 10+
+            box = f.getbbox(str(text))
+            return box[2] - box[0], box[3] - box[1]
+        except AttributeError:
+            # Older Pillow
+            return f.getsize(str(text))
 
     # Process flattened columns
     # We'll have: Row Label | (FN, LN) | (FN, LN) ...

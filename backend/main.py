@@ -925,14 +925,17 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     )
                     
                     # 2. Upload to Meta
+                    print(f"DEBUG: Generated image {img_path}. Uploading...")
                     media_id = upload_media.upload_media(img_path, "image/png")
+                    print(f"DEBUG: Media Upload Result ID: {media_id}")
                     
                     if media_id:
                         # 3. Send Image
+                        print(f"DEBUG: Sending media_id {media_id} to {phone}")
                         send_whatsapp_media(phone, "image", media_id, f"📊 Cuotas de *{study_code.upper()}*")
-                        # We still keep the text report as backup/caption if wanted, but shorten it or just skip.
                         reply = "Te acabo de enviar la tabla de cuotas en formato imagen. 👆"
                     else:
+                        print("DEBUG: Media ID was None, falling back to text report.")
                         reply = report # Fallback to text if upload fails
                         
                     # Clean up
