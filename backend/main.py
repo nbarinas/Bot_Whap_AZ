@@ -7,7 +7,7 @@ from typing import Optional
 import os
 from fastapi.security import OAuth2PasswordRequestForm
 
-from . import models, database, auth
+from . import models, database, auth, render_utils, upload_media
 import re
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -322,7 +322,7 @@ import requests
 from sqlalchemy import text
 
 # WhatsApp Configuration Constants (Use environment variables in production)
-WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "EAAXs5LUMDHoBQ052ePZAxW647UmCHi8OEdfACZABBXDKcITJiCow61lHT7njd1jI5ZALx73JNz2JDrpNUzISjHxZBZBny7Tm2LHfLdL72KmYGkZCs3oOSXftcUxazKFHt2z4IrRFko9oWXorQbhwaLHoUkBlIgmSVkCF4LhPDbSV3fnwK3EwfZCqLpbfZB62jwZDZD")
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "EAAXs5LUMDHoBQ3gidC32OLGzDEZC4uhZCAWI0WNVvk8nnKg4ewiYo4a0pQi9qhjhXwAZC94UoSg6BsPQzFqjPIYiTu6rQqkhqihEbIG5zfKTpqN3tcrce9dUR4UOCYR7qKYov3IILAcUcQUJjuAIZBZBo5koizRGSI7vBUkmD8nV2aK8xqwLAfoCR3MWWvAG6sF5GfInh5sBdQz6nPsR9fowIYhkKK3f8r80r5GJHTlSohpiWwEZB7rowThW38oH3PANfXZANosc8sFhZBwYKAaCZAR719T0ZA9rUZD")
 WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID", "969902462880750")
 WHATSAPP_VERIFY_TOKEN = os.getenv("WHATS_VERIFY_TOKEN", "azbot_secreto_2026")
 
@@ -879,7 +879,69 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 # View current matrix
                 study_code = ctx.get("study_code")
                 report = build_study_report(db, study_code)
-                reply = report
+                
+                # --- NEW: Quota Image Logic ---
+                try:
+                    # Get components for the image (extracting from DB again or using report data)
+                    all_study_quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
+                    
+                    col_tree = {} # { first_node: set(leaf_node) }
+                    row_keys = set()
+                    data_map = {} # { middle_str: { first_node: { leaf_node: {...} } } }
+
+                    for q in all_study_quotas:
+                        parts = q.category.split(' | ') if '|' in q.category else [q.category]
+                        parts.append(q.value)
+                        path_tuple = tuple(p.strip() for p in parts if p.strip())
+                        if not path_tuple: continue
+                        
+                        first_node = path_tuple[0]
+                        if len(path_tuple) > 2:
+                            middle_str = " | ".join(path_tuple[1:-1])
+                            leaf_node = path_tuple[-1]
+                        elif len(path_tuple) == 2:
+                            middle_str = "-"
+                            leaf_node = path_tuple[-1]
+                        else:
+                            middle_str = "-"
+                            leaf_node = path_tuple[0]
+                        
+                        if first_node not in col_tree: col_tree[first_node] = set()
+                        col_tree[first_node].add(leaf_node)
+                        row_keys.add(middle_str)
+                        if middle_str not in data_map: data_map[middle_str] = {}
+                        if first_node not in data_map[middle_str]: data_map[middle_str][first_node] = {}
+                        data_map[middle_str][first_node][leaf_node] = {'current': q.current_count, 'target': q.target_count}
+
+                    ordered_first_nodes = sorted(list(col_tree.keys()))
+                    ordered_leaf_nodes = {fn: sorted(list(col_tree[fn])) for fn in ordered_first_nodes}
+                    sorted_rows = sorted(list(row_keys))
+
+                    # 1. Render Image
+                    img_filename = f"quotas_{study_code}_{phone}.png"
+                    img_path = os.path.join(BASE_DIR, img_filename)
+                    render_utils.generate_quota_table_image(
+                        data_map, ordered_first_nodes, ordered_leaf_nodes, sorted_rows, study_code, img_path
+                    )
+                    
+                    # 2. Upload to Meta
+                    media_id = upload_media.upload_media(img_path, "image/png")
+                    
+                    if media_id:
+                        # 3. Send Image
+                        send_whatsapp_media(phone, "image", media_id, f"📊 Cuotas de *{study_code.upper()}*")
+                        # We still keep the text report as backup/caption if wanted, but shorten it or just skip.
+                        reply = "Te acabo de enviar la tabla de cuotas en formato imagen. 👆"
+                    else:
+                        reply = report # Fallback to text if upload fails
+                        
+                    # Clean up
+                    if os.path.exists(img_path):
+                        os.remove(img_path)
+                except Exception as e:
+                    print(f"Error generating quota image: {e}")
+                    reply = report
+                
                 session.state = "IDLE"
                 ctx = {}
             
