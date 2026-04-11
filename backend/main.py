@@ -874,7 +874,8 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                         if phone not in active_phones:
                             active_phones.append(phone)
                             
-                        send_quota_report_to_agents(db, study_code, active_phones, f"🗑️ Encuesta borrada por {sender_label}.\nFaltan {quota.target_count - quota.current_count} para esta cuota.")
+                        q_label = f"{quota.category} | {quota.value}" if quota.category != "General" else quota.value
+                        send_quota_report_to_agents(db, study_code, active_phones, f"🗑️ Encuesta de *{q_label}* BORRADA por *{sender_label}*.\nFaltan {quota.target_count - quota.current_count} para esta cuota.")
                         reply = "✅ Se ha borrado tu última encuesta registrada con éxito."
                 else:
                     reply = "⚠️ No tienes encuestas registradas recientes en este estudio para borrar."
@@ -988,7 +989,8 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     if phone not in active_phones:
                         active_phones.append(phone)
                         
-                    send_quota_report_to_agents(db, study_code, active_phones, f"📈 ¡Nueva encuesta guardada por {sender_label}!\nFaltan {quota.target_count - quota.current_count} para esta cuota.")
+                    q_label = f"{quota.category} | {quota.value}" if quota.category != "General" else quota.value
+                    send_quota_report_to_agents(db, study_code, active_phones, f"📈 ¡Nueva encuesta de *{q_label}* guardada por *{sender_label}*!\nFaltan {quota.target_count - quota.current_count} para esta cuota.")
                     
                     reply = f"✅ ¡Guardado! Faltan {quota.target_count - quota.current_count} encuestas de esta cuota."
                 else:
@@ -1808,7 +1810,8 @@ def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tupl
             active_phones.append(phone)
             
         label = sender_name if sender_name else phone
-        send_quota_report_to_agents(db, study_code, active_phones, f"📈 ¡Nueva encuesta guardada por {label}!\nFaltan {quota.target_count - quota.current_count} para esta cuota.")
+        q_label = f"{quota.category} | {quota.value}" if quota.category != "General" else quota.value
+        send_quota_report_to_agents(db, study_code, active_phones, f"📈 ¡Nueva encuesta de *{q_label}* guardada por *{label}*!\nFaltan {quota.target_count - quota.current_count} para esta cuota.")
         
         return f"✅ ¡Guardado! Faltan {quota.target_count - quota.current_count} encuestas de esta cuota.", "IDLE", None
         
