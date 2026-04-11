@@ -17,8 +17,8 @@ def generate_quota_table_image(data_map, ordered_first_nodes, ordered_leaf_nodes
     HEADER_TEXT = (255, 255, 255)
     CELL_BG = (255, 255, 255)
     CELL_BG_ALT = (248, 249, 252) # Very light gray-blue
-    HIGHLIGHT_BG = (255, 248, 204) # Soft yellow for filled quotas
-    HIGHLIGHT_TEXT = (140, 110, 0) # Darker gold/brown for contrast
+    HIGHLIGHT_BG = (255, 230, 100) # Pronounced sunny yellow for filled quotas
+    HIGHLIGHT_TEXT = (100, 80, 0)   # Darker gold-brown for better contrast
     EXCEEDED_BG = (255, 204, 204)  # Soft red for exceeded quotas
     EXCEEDED_TEXT = (180, 0, 0)    # Darker red for contrast
     BORDER_COLOR = (218, 220, 224)
