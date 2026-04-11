@@ -87,15 +87,19 @@ def generate_quota_table_image(data_map, ordered_first_nodes, ordered_leaf_nodes
     # row_totals[row_label] = {current, target}
     # col_totals[(fn, ln)] = {current, target}
     # grand_total = {current, target}
-    row_totals = {r: {'current': 0, 'target': 0} for r in sorted_rows}
-    col_totals = {(fn, ln): {'current': 0, 'target': 0} for fn, ln in flat_cols}
-    grand_total = {'current': 0, 'target': 0}
+    row_totals = {r: {'current': 0, 'target': 0, 'any_exceeded': False} for r in sorted_rows}
+    col_totals = {(fn, ln): {'current': 0, 'target': 0, 'any_exceeded': False} for fn, ln in flat_cols}
+    grand_total = {'current': 0, 'target': 0, 'any_exceeded': False}
 
     for r in sorted_rows:
         for fn, ln in flat_cols:
             if fn in data_map.get(r, {}) and ln in data_map[r][fn]:
                 d = data_map[r][fn][ln]
                 curr, targ = d['current'], d['target']
+                if curr > targ:
+                    row_totals[r]['any_exceeded'] = True
+                    col_totals[(fn, ln)]['any_exceeded'] = True
+                    grand_total['any_exceeded'] = True
                 row_totals[r]['current'] += curr
                 row_totals[r]['target'] += targ
                 col_totals[(fn, ln)]['current'] += curr
@@ -217,7 +221,8 @@ def generate_quota_table_image(data_map, ordered_first_nodes, ordered_leaf_nodes
         rt = row_totals[r_label]
         rt_str = f"{rt['current']}/{rt['target']}"
         cell_w = col_widths[-1]
-        is_hl, is_ex = (rt['current'] == rt['target'] and rt['target'] > 0), (rt['current'] > rt['target'])
+        is_hl = (rt['current'] == rt['target'] and rt['target'] > 0 and not rt['any_exceeded'])
+        is_ex = (rt['current'] > rt['target'])
         cell_bg = EXCEEDED_BG if is_ex else (HIGHLIGHT_BG if is_hl else bg)
         draw.rectangle([current_x, current_y, current_x + cell_w, current_y + row_height], fill=cell_bg, outline=BORDER_COLOR)
         tw, th = get_text_size(rt_str, bold_font)
@@ -236,7 +241,8 @@ def generate_quota_table_image(data_map, ordered_first_nodes, ordered_leaf_nodes
         ct = col_totals[(fn, ln)]
         ct_str = f"{ct['current']}/{ct['target']}"
         cell_w = col_widths[c_idx + 1]
-        is_hl, is_ex = (ct['current'] == ct['target'] and ct['target'] > 0), (ct['current'] > ct['target'])
+        is_hl = (ct['current'] == ct['target'] and ct['target'] > 0 and not ct['any_exceeded'])
+        is_ex = (ct['current'] > ct['target'])
         cell_bg = EXCEEDED_BG if is_ex else (HIGHLIGHT_BG if is_hl else CELL_BG_ALT)
         draw.rectangle([current_x, current_y, current_x + cell_w, current_y + row_height], fill=cell_bg, outline=BORDER_COLOR)
         tw, th = get_text_size(ct_str, bold_font)
@@ -247,7 +253,8 @@ def generate_quota_table_image(data_map, ordered_first_nodes, ordered_leaf_nodes
     # Grand Total (Bottom Right)
     gt_str = f"{grand_total['current']}/{grand_total['target']}"
     cell_w = col_widths[-1]
-    is_hl, is_ex = (grand_total['current'] == grand_total['target'] and grand_total['target'] > 0), (grand_total['current'] > grand_total['target'])
+    is_hl = (grand_total['current'] == grand_total['target'] and grand_total['target'] > 0 and not grand_total['any_exceeded'])
+    is_ex = (grand_total['current'] > grand_total['target'])
     cell_bg = EXCEEDED_BG if is_ex else (HIGHLIGHT_BG if is_hl else CELL_BG_ALT)
     draw.rectangle([current_x, current_y, current_x + cell_w, current_y + row_height], fill=cell_bg, outline=BORDER_COLOR)
     tw, th = get_text_size(gt_str, bold_font)
@@ -260,8 +267,8 @@ def generate_quota_table_image(data_map, ordered_first_nodes, ordered_leaf_nodes
 if __name__ == "__main__":
     # Internal Mock Test
     mock_data = {
-        '18-30': {'Norte': {'MT': {'current': 12, 'target': 12}, 'MB': {'current': 5, 'target': 12}}, 
-                  'Centro': {'MT': {'current': 11, 'target': 11}, 'MB': {'current': 3, 'target': 11}}},
+        '18-30': {'Norte': {'MT': {'current': 13, 'target': 12}, 'MB': {'current': 11, 'target': 12}}, 
+                  'Centro': {'MT': {'current': 11, 'target': 11}, 'MB': {'current': 11, 'target': 11}}},
         '31-45': {'Norte': {'MT': {'current': 8, 'target': 12}, 'MB': {'current': 12, 'target': 12}},
                   'Centro': {'MT': {'current': 2, 'target': 11}, 'MB': {'current': 11, 'target': 11}}}
     }
