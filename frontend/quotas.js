@@ -81,6 +81,7 @@ async function loadQuotas() {
                 }
             });
 
+            enrichWithTotals(root);
             const html = renderTreeHtml(root, true);
 
             const statusBadge = isClosed ? '<span style="background:var(--text-muted); color:white; padding:2px 8px; border-radius:10px; margin-left:10px; font-size:0.8rem;"><i class="fas fa-archive"></i> Cerrado</span>' : '';
@@ -115,7 +116,8 @@ function renderTreeHtml(node, isRoot = false, level = 0, isProposal = false) {
         let headerHtml = '';
         let bodyHtml = '';
         cols.forEach(q => {
-            headerHtml += `<div>${isProposal ? q.val : q.value}</div>`;
+            const isTotal = q.is_total || false;
+            headerHtml += `<div class="${isTotal ? 'is-total-header' : ''}">${isProposal ? q.val : q.value}</div>`;
             if (isProposal) {
                 bodyHtml += `
                     <div>
@@ -130,7 +132,7 @@ function renderTreeHtml(node, isRoot = false, level = 0, isProposal = false) {
                 else if (percent >= 50) color = '#f59e0b';
 
                 bodyHtml += `
-                    <div>
+                    <div class="${isTotal ? 'is-total-cell' : ''}">
                         <div class="val-container">
                             <div class="val-disp">${q.current_count}</div>
                             <div class="val-target">/ ${q.target_count}</div>
@@ -165,6 +167,63 @@ function renderTreeHtml(node, isRoot = false, level = 0, isProposal = false) {
         html += `</div>`;
     }
     return html;
+}
+
+function enrichWithTotals(node) {
+    if (node.__isLeaf) {
+        // Horizontal Total (A la derecha)
+        const totalCurr = node.__quotas.reduce((sum, q) => sum + (q.current_count || 0), 0);
+        const totalTarg = node.__quotas.reduce((sum, q) => sum + (q.target_count || 0), 0);
+        node.__quotas.push({
+            value: 'Total',
+            current_count: totalCurr,
+            target_count: totalTarg,
+            is_total: true
+        });
+        // Return summary for parent summation
+        const byVal = {};
+        node.__quotas.forEach(q => {
+            if (q.value !== 'Total') {
+                byVal[q.value] = { c: q.current_count, t: q.target_count };
+            }
+        });
+        return { current: totalCurr, target: totalTarg, countsByVal: byVal };
+    }
+
+    const keys = Object.keys(node).filter(k => k !== '__isLeaf' && k !== '__quotas');
+    if (keys.length === 0) return { current: 0, target: 0 };
+
+    let totalCurr = 0;
+    let totalTarg = 0;
+    let aggregateCols = {};
+
+    keys.forEach(k => {
+        const res = enrichWithTotals(node[k]);
+        totalCurr += res.current;
+        totalTarg += res.target;
+        if (res.countsByVal) {
+            for (const [v, counts] of Object.entries(res.countsByVal)) {
+                if (!aggregateCols[v]) aggregateCols[v] = { c: 0, t: 0 };
+                aggregateCols[v].c += counts.c;
+                aggregateCols[v].t += counts.t;
+            }
+        }
+    });
+
+    // Vertical Total (Para abajo)
+    if (Object.keys(aggregateCols).length > 0) {
+        const totalQuotas = [];
+        // Maintain column order if possible - here we just use whatever keys were in aggregateCols
+        for (const [v, counts] of Object.entries(aggregateCols)) {
+            totalQuotas.push({ value: v, current_count: counts.c, target_count: counts.t, is_total: true });
+        }
+        // Grand total for this group
+        totalQuotas.push({ value: 'Total', current_count: totalCurr, target_count: totalTarg, is_total: true });
+        
+        node['Total'] = { __isLeaf: true, __quotas: totalQuotas };
+    }
+
+    return { current: totalCurr, target: totalTarg };
 }
 
 function toggleAgeInputs() {
