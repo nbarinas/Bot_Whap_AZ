@@ -74,3 +74,11 @@ class BotSession(Base):
     state = Column(String(50), default="IDLE")
     context_data = Column(Text, default="{}") # JSON containing study_code, action, and selected_path
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+
+class BotStudySubscription(Base):
+    __tablename__ = "bot_study_subscriptions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    phone_number = Column(String(50), index=True)
+    study_code = Column(String(50), index=True)
+    subscribed_at = Column(DateTime(timezone=True), server_default=func.now())

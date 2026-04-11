@@ -886,6 +886,18 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             elif msg == "3":
                 # View current matrix
                 study_code = ctx.get("study_code")
+                
+                # Manual Registration for today's updates
+                sub_exists = db.query(models.BotStudySubscription).filter(
+                    models.BotStudySubscription.phone_number == phone,
+                    models.BotStudySubscription.study_code == study_code,
+                    func.date(models.BotStudySubscription.subscribed_at) == func.date(func.now())
+                ).first()
+                if not sub_exists:
+                    new_sub = models.BotStudySubscription(phone_number=phone, study_code=study_code)
+                    db.add(new_sub)
+                    db.commit()
+
                 # Just send to the requester
                 send_quota_report_to_agents(db, study_code, [phone], f"📊 Estado de Cuotas: *{study_code.upper()}*")
                 reply = "Te acabo de enviar la tabla de cuotas actualizada. 👆"
@@ -1509,10 +1521,8 @@ def send_quota_report_to_agents(db, study_code, phones, caption=""):
     except Exception as e:
         print(f"Error in send_quota_report_to_agents: {e}")
 
-def get_daily_active_phones_for_study(db, study_code):
-    """
-    Returns unique phone numbers that have submitted surveys for the study today.
-    """
+    # 1. Agents who submitted recently (Charged surveys)
+    from sqlalchemy import union
     from datetime import date, datetime
     today = date.today()
     start_of_day = datetime(today.year, today.month, today.day)
@@ -1520,15 +1530,27 @@ def get_daily_active_phones_for_study(db, study_code):
     # Identify quotas belonging to this study
     quota_ids_subquery = db.query(models.BotQuota.id).filter(models.BotQuota.study_code == study_code).subquery()
     
-    active_phones = db.query(
-        models.QuotaSubmission.phone_number
+    active_phones_subquery = db.query(
+        models.QuotaSubmission.phone_number.label("phone")
     ).filter(
         models.QuotaSubmission.bot_quota_id.in_(quota_ids_subquery),
         models.QuotaSubmission.is_deleted == 0,
         models.QuotaSubmission.submitted_at >= start_of_day
-    ).distinct().all()
+    )
     
-    return [p[0] for p in active_phones if p[0]]
+    # 2. Agents who requested the report today (Manual Subscription)
+    subscribers_subquery = db.query(
+        models.BotStudySubscription.phone_number.label("phone")
+    ).filter(
+        models.BotStudySubscription.study_code == study_code,
+        models.BotStudySubscription.subscribed_at >= start_of_day
+    )
+    
+    # Union both lists
+    final_query = active_phones_subquery.union(subscribers_subquery)
+    results = final_query.distinct().all()
+    
+    return [p[0] for p in results if p[0]]
 
 def build_study_report(db, study_code):
     from sqlalchemy import func
