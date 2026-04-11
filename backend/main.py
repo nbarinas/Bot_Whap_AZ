@@ -866,9 +866,14 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                         last_sub.is_deleted = 1
                         quota = db.query(models.BotQuota).get(last_sub.bot_quota_id)
                         quota.current_count -= 1
-                    
-                        report = build_study_report(db, study_code)
-                        reply = f"✅ Se ha borrado tu última encuesta registrada con éxito.\n{report}"
+                        db.commit()
+                        
+                        active_phones = get_daily_active_phones_for_study(db, study_code)
+                        if phone not in active_phones:
+                            active_phones.append(phone)
+                            
+                        send_quota_report_to_agents(db, study_code, active_phones, f"🗑️ Encuesta borrada por {phone}.\nFaltan {quota.target_count - quota.current_count} para esta cuota.")
+                        reply = "✅ Se ha borrado tu última encuesta registrada con éxito."
                 else:
                     reply = "⚠️ No tienes encuestas registradas recientes en este estudio para borrar."
                 
