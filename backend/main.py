@@ -894,7 +894,30 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 interactive_data = next_interactive
                 session.state = next_state
             else:
-                reply, interactive_data, ctx = handle_invalid("Selección inválida.", opts_text, ctx.get("interactive_fallback"))
+                # Try free-text fast match
+                study_code = ctx.get("study_code")
+                matched_quota, err_msg = check_free_text_quota(db, study_code, msg)
+                if matched_quota:
+                    q_name = matched_quota.category + " | " + matched_quota.value if matched_quota.category != "General" else matched_quota.value
+                    reply = f"¿Quieres agregar 1 encuesta a la cuota:\n*{q_name}*?"
+                    session.state = "WAITING_FREE_TEXT_CONFIRM"
+                    ctx["free_text_quota_id"] = matched_quota.id
+                    interactive_data = {
+                        "type": "button",
+                        "body": {"text": reply},
+                        "action": {
+                            "buttons": [
+                                {"type": "reply", "reply": {"id": "1", "title": "Sí, agregar"}},
+                                {"type": "reply", "reply": {"id": "2", "title": "No, cancelar"}}
+                            ]
+                        }
+                    }
+                    ctx["interactive_fallback"] = interactive_data
+                elif err_msg:
+                    reply, interactive_data, ctx = handle_invalid(err_msg, opts_text, ctx.get("interactive_fallback"))
+                else:
+                    reply, interactive_data, ctx = handle_invalid("Selección inválida.", opts_text, ctx.get("interactive_fallback"))
+
 
         elif state == "WAITING_CATEGORY":
             # Handle the category selection
@@ -916,7 +939,61 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 else:
                     reply, interactive_data, ctx = handle_invalid("Opción inválida.", opts_text, ctx.get("interactive_fallback"))
             except ValueError:
-                reply, interactive_data, ctx = handle_invalid("Selección inválida.", opts_text, ctx.get("interactive_fallback"))
+                study_code = ctx.get("study_code")
+                matched_quota, err_msg = check_free_text_quota(db, study_code, msg)
+                if matched_quota:
+                    q_name = matched_quota.category + " | " + matched_quota.value if matched_quota.category != "General" else matched_quota.value
+                    reply = f"¿Quieres agregar 1 encuesta a la cuota:\n*{q_name}*?"
+                    session.state = "WAITING_FREE_TEXT_CONFIRM"
+                    ctx["free_text_quota_id"] = matched_quota.id
+                    interactive_data = {
+                        "type": "button",
+                        "body": {"text": reply},
+                        "action": {
+                            "buttons": [
+                                {"type": "reply", "reply": {"id": "1", "title": "Sí, agregar"}},
+                                {"type": "reply", "reply": {"id": "2", "title": "No, cancelar"}}
+                            ]
+                        }
+                    }
+                    ctx["interactive_fallback"] = interactive_data
+                elif err_msg:
+                    reply, interactive_data, ctx = handle_invalid(err_msg, opts_text, ctx.get("interactive_fallback"))
+                else:
+                    reply, interactive_data, ctx = handle_invalid("Selección inválida.", opts_text, ctx.get("interactive_fallback"))
+
+
+        elif state == "WAITING_FREE_TEXT_CONFIRM":
+            if msg in ["1", "si", "sí", "sí, agregar"]:
+                quota_id = ctx.get("free_text_quota_id")
+                quota = db.query(models.BotQuota).get(quota_id)
+                if quota:
+                    sub = models.QuotaSubmission(
+                        bot_quota_id=quota.id,
+                        phone_number=phone,
+                        is_deleted=0
+                    )
+                    db.add(sub)
+                    quota.current_count += 1
+                    study_code = ctx.get("study_code")
+                    
+                    active_phones = get_daily_active_phones_for_study(db, study_code)
+                    if phone not in active_phones:
+                        active_phones.append(phone)
+                        
+                    send_quota_report_to_agents(db, study_code, active_phones, f"📈 ¡Nueva encuesta guardada por {phone}!\nFaltan {quota.target_count - quota.current_count} para esta cuota.")
+                    
+                    reply = f"✅ ¡Guardado! Faltan {quota.target_count - quota.current_count} encuestas de esta cuota."
+                else:
+                    reply = "⚠️ Error: No se encontró la cuota en la base de datos."
+                session.state = "IDLE"
+                ctx = {}
+            elif msg in ["2", "no", "no, cancelar", "cancelar"]:
+                reply = "❌ Operación cancelada. Escribe 'Hola' para empezar de nuevo."
+                session.state = "IDLE"
+                ctx = {}
+            else:
+                reply, interactive_data, ctx = handle_invalid("Selección inválida.", "1. Sí, agregar\n2. No, cancelar", ctx.get("interactive_fallback"))
 
         # --- NUEVA RUTA: ESTADO VALIDACION NUMEROS ---
     
@@ -1599,6 +1676,33 @@ def build_study_report(db, study_code):
         
     return f"\n{matrix_msg}\n{stats_msg}"
 
+def check_free_text_quota(db, study_code: str, msg: str):
+    msg_lower = msg.strip().lower()
+    quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
+    
+    matched_quotas = []
+    for q in quotas:
+        if q.category == "General":
+            parts = [q.value.strip()]
+        else:
+            parts = [x.strip() for x in q.category.split("|")] + [q.value.strip()]
+            
+        all_parts_found = True
+        for p in parts:
+            if p.lower() not in msg_lower:
+                all_parts_found = False
+                break
+        if all_parts_found:
+            matched_quotas.append(q)
+            
+    if len(matched_quotas) == 1:
+        return matched_quotas[0], ""
+        
+    elif len(matched_quotas) > 1:
+        return None, "Hay varias cuotas que coinciden con tu texto. Por favor, sé más específico o usa el menú numérico."
+        
+    return None, ""
+
 def compute_next_bot_step_interactive(db, ctx, phone="") -> tuple[str, str, dict]:
 
     study_code = ctx["study_code"]
@@ -1662,7 +1766,10 @@ def compute_next_bot_step_interactive(db, ctx, phone="") -> tuple[str, str, dict
         return "⚠️ Error al conseguir la siguiente categoría.", "IDLE", None
         
     ctx["current_options"] = next_options
-    reply = "Selecciona una opción:"
+    if depth == 0:
+        reply = "⚡ *Modo rápido:* Escribe la cuota completa en un solo mensaje (ej: 'mb hombre 15-19').\n\n📌 O selecciona paso a paso:"
+    else:
+        reply = "Selecciona una opción:"
     
     rows = []
     for i, o in enumerate(next_options):
