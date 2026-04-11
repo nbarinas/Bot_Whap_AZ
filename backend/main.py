@@ -568,6 +568,8 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
     elif phone == "0000":
         agent_name = "Admin"
     
+    sender_label = agent_name if agent_name else phone
+    
     active_agent = db.query(models.BotActiveAgent).filter(
         (models.BotActiveAgent.phone_number == phone) | 
         (models.BotActiveAgent.phone_number == normalized_phone)
@@ -872,7 +874,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                         if phone not in active_phones:
                             active_phones.append(phone)
                             
-                        send_quota_report_to_agents(db, study_code, active_phones, f"🗑️ Encuesta borrada por {phone}.\nFaltan {quota.target_count - quota.current_count} para esta cuota.")
+                        send_quota_report_to_agents(db, study_code, active_phones, f"🗑️ Encuesta borrada por {sender_label}.\nFaltan {quota.target_count - quota.current_count} para esta cuota.")
                         reply = "✅ Se ha borrado tu última encuesta registrada con éxito."
                 else:
                     reply = "⚠️ No tienes encuestas registradas recientes en este estudio para borrar."
@@ -894,7 +896,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 ctx["action"] = "ADD"
                 ctx["selected_path"] = []
                 ctx["invalid_attempts"] = 0
-                reply_text, next_state, next_interactive = compute_next_bot_step_interactive(db, ctx, phone)
+                reply_text, next_state, next_interactive = compute_next_bot_step_interactive(db, ctx, phone, sender_name=sender_label)
                 reply = reply_text
                 interactive_data = next_interactive
                 session.state = next_state
@@ -935,7 +937,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     ctx["selected_path"].append(chosen_val)
                     ctx["invalid_attempts"] = 0
                     # Compute next step
-                    reply_text, next_state, next_interactive = compute_next_bot_step_interactive(db, ctx, phone)
+                    reply_text, next_state, next_interactive = compute_next_bot_step_interactive(db, ctx, phone, sender_name=sender_label)
                     reply = reply_text
                     interactive_data = next_interactive
                     session.state = next_state
@@ -986,7 +988,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     if phone not in active_phones:
                         active_phones.append(phone)
                         
-                    send_quota_report_to_agents(db, study_code, active_phones, f"📈 ¡Nueva encuesta guardada por {phone}!\nFaltan {quota.target_count - quota.current_count} para esta cuota.")
+                    send_quota_report_to_agents(db, study_code, active_phones, f"📈 ¡Nueva encuesta guardada por {sender_label}!\nFaltan {quota.target_count - quota.current_count} para esta cuota.")
                     
                     reply = f"✅ ¡Guardado! Faltan {quota.target_count - quota.current_count} encuestas de esta cuota."
                 else:
@@ -1742,7 +1744,7 @@ def check_free_text_quota(db, study_code: str, msg: str):
         
     return None, ""
 
-def compute_next_bot_step_interactive(db, ctx, phone="") -> tuple[str, str, dict]:
+def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tuple[str, str, dict]:
 
     study_code = ctx["study_code"]
     selected_path = ctx["selected_path"]
@@ -1790,7 +1792,8 @@ def compute_next_bot_step_interactive(db, ctx, phone="") -> tuple[str, str, dict
         if phone not in active_phones:
             active_phones.append(phone)
             
-        send_quota_report_to_agents(db, study_code, active_phones, f"📈 ¡Nueva encuesta guardada por {phone}!\nFaltan {quota.target_count - quota.current_count} para esta cuota.")
+        label = sender_name if sender_name else phone
+        send_quota_report_to_agents(db, study_code, active_phones, f"📈 ¡Nueva encuesta guardada por {label}!\nFaltan {quota.target_count - quota.current_count} para esta cuota.")
         
         return f"✅ ¡Guardado! Faltan {quota.target_count - quota.current_count} encuestas de esta cuota.", "IDLE", None
         
