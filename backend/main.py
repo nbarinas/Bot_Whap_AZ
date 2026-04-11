@@ -1675,31 +1675,39 @@ def build_study_report(db, study_code):
         stats_msg += f"Total hoy: {total_today}"
         
     return f"\n{matrix_msg}\n{stats_msg}"
-
 def check_free_text_quota(db, study_code: str, msg: str):
     msg_lower = msg.strip().lower()
     quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
     
+    best_score = 0
     matched_quotas = []
+    
     for q in quotas:
         if q.category == "General":
             parts = [q.value.strip()]
         else:
             parts = [x.strip() for x in q.category.split("|")] + [q.value.strip()]
             
-        all_parts_found = True
-        for p in parts:
-            if p.lower() not in msg_lower:
-                all_parts_found = False
-                break
-        if all_parts_found:
-            matched_quotas.append(q)
+        score = sum(1 for p in parts if p.lower() in msg_lower)
+        
+        if score > 0:
+            if score > best_score:
+                best_score = score
+                matched_quotas = [(q, parts)]
+            elif score == best_score:
+                matched_quotas.append((q, parts))
             
+    if not matched_quotas:
+        return None, ""
+        
     if len(matched_quotas) == 1:
-        return matched_quotas[0], ""
+        return matched_quotas[0][0], ""
         
     elif len(matched_quotas) > 1:
-        return None, "Hay varias cuotas que coinciden con tu texto. Por favor, sé más específico o usa el menú numérico."
+        perfect_matches = [q for q, p in matched_quotas if len(p) == best_score]
+        if len(perfect_matches) == 1:
+            return perfect_matches[0], ""
+        return None, "Hay varias cuotas que coinciden con tu texto. Por favor, sé más específico añadiendo más palabras (ej: el sexo, la ciudad) o usa el menú."
         
     return None, ""
 
