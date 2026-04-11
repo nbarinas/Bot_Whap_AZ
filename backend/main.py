@@ -1690,6 +1690,21 @@ def check_free_text_quota(db, study_code: str, msg: str):
         if not text: return []
         return re.findall(r'[a-z0-9\-]+', text.lower())
 
+    def is_token_match(quota_token, message_tokens):
+        if quota_token in message_tokens:
+            return True
+        # Range logic: if quota is "10-14" and message has "12"
+        range_match = re.match(r'^(\d+)-(\d+)$', quota_token)
+        if range_match:
+            try:
+                low, high = map(int, range_match.groups())
+                for mt in message_tokens:
+                    if mt.isdigit() and low <= int(mt) <= high:
+                        return True
+            except (ValueError, TypeError):
+                pass
+        return False
+
     msg_tokens = set(get_tokens(msg))
     if not msg_tokens:
         return None, ""
@@ -1710,8 +1725,8 @@ def check_free_text_quota(db, study_code: str, msg: str):
         for p in parts:
             p_tokens = get_tokens(p)
             quota_parts_tokens.append(p_tokens)
-            # Check if all tokens of this part are present in the message
-            if all(pt in msg_tokens for pt in p_tokens):
+            # Check if all tokens of this part are "matched" in the message
+            if all(is_token_match(pt, msg_tokens) for pt in p_tokens):
                 score += 1
         
         if score > 0:
