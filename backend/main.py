@@ -1681,7 +1681,17 @@ def build_study_report(db, study_code):
         
     return f"\n{matrix_msg}\n{stats_msg}"
 def check_free_text_quota(db, study_code: str, msg: str):
-    msg_lower = msg.strip().lower()
+    import re
+    
+    # Normalize: lowercase and get all alphanumeric tokens plus hyphens (for ages like 18-30)
+    def get_tokens(text):
+        if not text: return []
+        return re.findall(r'[a-z0-9\-]+', text.lower())
+
+    msg_tokens = set(get_tokens(msg))
+    if not msg_tokens:
+        return None, ""
+
     quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
     
     best_score = 0
@@ -1689,11 +1699,18 @@ def check_free_text_quota(db, study_code: str, msg: str):
     
     for q in quotas:
         if q.category == "General":
-            parts = [q.value.strip()]
+            parts = [q.value.lower().strip()]
         else:
-            parts = [x.strip() for x in q.category.split("|")] + [q.value.strip()]
+            parts = [x.strip().lower() for x in q.category.split("|")] + [q.value.lower().strip()]
             
-        score = sum(1 for p in parts if p.lower() in msg_lower)
+        score = 0
+        quota_parts_tokens = []
+        for p in parts:
+            p_tokens = get_tokens(p)
+            quota_parts_tokens.append(p_tokens)
+            # Check if all tokens of this part are present in the message
+            if all(pt in msg_tokens for pt in p_tokens):
+                score += 1
         
         if score > 0:
             if score > best_score:
@@ -1709,10 +1726,19 @@ def check_free_text_quota(db, study_code: str, msg: str):
         return matched_quotas[0][0], ""
         
     elif len(matched_quotas) > 1:
+        # If there are ties, prefer the one where the score matches the total number of parts (Perfect match)
         perfect_matches = [q for q, p in matched_quotas if len(p) == best_score]
         if len(perfect_matches) == 1:
             return perfect_matches[0], ""
-        return None, "Hay varias cuotas que coinciden con tu texto. Por favor, sé más específico añadiendo más palabras (ej: el sexo, la ciudad) o usa el menú."
+        
+        # If still more than one, check if one has fewer TOTAL parts but same score
+        # e.g. msg="18-30", parts1=["Edad", "18-30"] score=1, parts2=["18-30"] score=1
+        # The shorter one is more specific to the input.
+        matched_quotas.sort(key=lambda x: len(x[1]))
+        if len(matched_quotas[0][1]) < len(matched_quotas[1][1]):
+            return matched_quotas[0][0], ""
+
+        return None, "Hay varias cuotas que coinciden con tu texto. Por favor, sé más específico (ej: añade el sexo o rango de edad exacto) o usa los botones."
         
     return None, ""
 
