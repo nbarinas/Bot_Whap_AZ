@@ -539,6 +539,22 @@ def simulate_whatsapp_webhook(req: WebhookSimulateRequest, db: Session = Depends
     return {"reply": reply, "interactive": interactive}
 
 
+def set_exclusive_study_subscription(db: Session, phone: str, study_code: str):
+    """
+    Clears all existing subscriptions for this phone and sets a new one for the given study.
+    Ensures the agent only receives updates for their LATEST interest.
+    """
+    # Clear any previous daily subscription
+    db.query(models.BotStudySubscription).filter(
+        models.BotStudySubscription.phone_number == phone
+    ).delete()
+    
+    # Add the new one
+    new_sub = models.BotStudySubscription(phone_number=phone, study_code=study_code)
+    db.add(new_sub)
+    db.commit()
+
+
 def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users: Session, media_id: str = None) -> tuple[str, dict]:
     """
     Core bot logic extracted from the simulator so both endpoints can share it.
@@ -824,6 +840,10 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 if 1 <= choice <= len(available):
                     study_code = available[choice - 1]
                     ctx["study_code"] = study_code
+                    
+                    # Set as the exclusive study for notifications
+                    set_exclusive_study_subscription(db, phone, study_code)
+                    
                     ctx["invalid_attempts"] = 0
                     session.state = "WAITING_ACTION"
                     reply = f"Estudio {study_code} seleccionado. ¿Qué deseas hacer?"
@@ -887,16 +907,8 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 # View current matrix
                 study_code = ctx.get("study_code")
                 
-                # Manual Registration for today's updates
-                sub_exists = db.query(models.BotStudySubscription).filter(
-                    models.BotStudySubscription.phone_number == phone,
-                    models.BotStudySubscription.study_code == study_code,
-                    func.date(models.BotStudySubscription.subscribed_at) == func.date(func.now())
-                ).first()
-                if not sub_exists:
-                    new_sub = models.BotStudySubscription(phone_number=phone, study_code=study_code)
-                    db.add(new_sub)
-                    db.commit()
+                # Update EXCLUSIVE Subscription
+                set_exclusive_study_subscription(db, phone, study_code)
 
                 # Just send to the requester
                 send_quota_report_to_agents(db, study_code, [phone], f"📊 Estado de Cuotas: *{study_code.upper()}*")
@@ -996,6 +1008,9 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     db.add(sub)
                     quota.current_count += 1
                     study_code = ctx.get("study_code")
+                    
+                    # Ensure they are subscribed to this study now (latest interaction)
+                    set_exclusive_study_subscription(db, phone, study_code)
                     
                     active_phones = get_daily_active_phones_for_study(db, study_code)
                     if phone not in active_phones:
@@ -1521,36 +1536,23 @@ def send_quota_report_to_agents(db, study_code, phones, caption=""):
     except Exception as e:
         print(f"Error in send_quota_report_to_agents: {e}")
 
-    # 1. Agents who submitted recently (Charged surveys)
-    from sqlalchemy import union
+def get_daily_active_phones_for_study(db, study_code):
+    """
+    Returns unique phone numbers currently subscribed to this study for today.
+    Now that we have exclusive subscriptions, this table defines exactly who gets what.
+    """
     from datetime import date, datetime
     today = date.today()
     start_of_day = datetime(today.year, today.month, today.day)
     
-    # Identify quotas belonging to this study
-    quota_ids_subquery = db.query(models.BotQuota.id).filter(models.BotQuota.study_code == study_code).subquery()
-    
-    active_phones_subquery = db.query(
-        models.QuotaSubmission.phone_number.label("phone")
-    ).filter(
-        models.QuotaSubmission.bot_quota_id.in_(quota_ids_subquery),
-        models.QuotaSubmission.is_deleted == 0,
-        models.QuotaSubmission.submitted_at >= start_of_day
-    )
-    
-    # 2. Agents who requested the report today (Manual Subscription)
-    subscribers_subquery = db.query(
-        models.BotStudySubscription.phone_number.label("phone")
+    subscribers = db.query(
+        models.BotStudySubscription.phone_number
     ).filter(
         models.BotStudySubscription.study_code == study_code,
         models.BotStudySubscription.subscribed_at >= start_of_day
-    )
+    ).distinct().all()
     
-    # Union both lists
-    final_query = active_phones_subquery.union(subscribers_subquery)
-    results = final_query.distinct().all()
-    
-    return [p[0] for p in results if p[0]]
+    return [p[0] for p in subscribers if p[0]]
 
 def build_study_report(db, study_code):
     from sqlalchemy import func
@@ -1824,10 +1826,12 @@ def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tupl
         db.add(sub)
         quota.current_count += 1
         
+        # Ensure they are subscribed to this study now (latest interaction)
+        set_exclusive_study_subscription(db, phone, study_code)
+        
         # Broadcast update to everyone active today
         active_phones = get_daily_active_phones_for_study(db, study_code)
         # Ensure the current reporter is included if not already in the active list 
-        # (they should be since we just committed the submission)
         if phone not in active_phones:
             active_phones.append(phone)
             
