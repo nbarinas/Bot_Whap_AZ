@@ -5,7 +5,11 @@ import os
 # Connect to the existing az_marketing.db in the az folder for local dev
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Note: assuming 'backend' and 'az' are siblings in the root folder
-LOCAL_AZ_DB_PATH = os.path.abspath(os.path.join(BASE_DIR, '..', 'az', 'az_marketing.db'))
+# Check for sibling 'az' folder to share DB locally, fallback to root DB
+SIBLING_AZ_DB = os.path.abspath(os.path.join(BASE_DIR, '..', '..', 'az', 'az_marketing.db'))
+ROOT_AZ_DB = os.path.abspath(os.path.join(BASE_DIR, '..', 'az_marketing.db'))
+
+LOCAL_AZ_DB_PATH = SIBLING_AZ_DB if os.path.exists(SIBLING_AZ_DB) else ROOT_AZ_DB
 
 # 1. BOT DATABASE (Read/Write for Quotas and Sessions)
 # Defaults to a local sqlite file in the backend folder
