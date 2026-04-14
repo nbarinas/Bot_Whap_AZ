@@ -719,21 +719,35 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             
     # --- DETECCION DE CENSO (TRIGGER) ---
     if user_type == "AGENT" and not media_id:
-        # Support: censo/censos [NSE: mb/mt/ba] <count> [interviewer]
-        # Example: "censos mb 10 juan"
-        censos_match = re.search(r"^(censos?)\s*(mb|mt|ba)?\s*(\d+)(?:\s+(.+))?$", msg)
-        if censos_match:
-            nse_token = censos_match.group(2)
-            count = int(censos_match.group(3))
-            name_token = censos_match.group(4)
+        # Support: censo/censos followed by counts, NSE (mb, mt, ba) and name in any order
+        # Example: "censo 69 mb jinny", "censos ba 5 maria"
+        if msg.startswith("censo"):
+            parts = msg.split()
+            # The first part is always the trigger "censo" or "censos"
             
-            interviewer = None
-            if name_token:
-                interviewer = find_interviewer(db_users, name_token)
+            nse_token = None
+            count = None
+            name_parts = []
             
-            # Find or Create a "Censos" quota for this study. 
-            # If NSE is provided, we use "Censos MB" etc.
-            census_value = "Censos " + nse_token.upper() if nse_token else "Censos"
+            for p in parts[1:]:
+                p_low = p.lower()
+                if p_low in ["mb", "mt", "ba"] and nse_token is None:
+                    nse_token = p_low
+                elif p.isdigit() and count is None:
+                    count = int(p)
+                else:
+                    name_parts.append(p)
+            
+            # If at least we have a count, we proceed
+            if count is not None:
+                name_token = " ".join(name_parts) if name_parts else None
+                interviewer = None
+                if name_token:
+                    interviewer = find_interviewer(db_users, name_token)
+                
+                # Find or Create a "Censos" quota for this study. 
+                # If NSE is provided, we use "Censos MB" etc.
+                census_value = "Censos " + nse_token.upper() if nse_token else "Censos"
             
             # Find or Create a "Censos" quota for this study if one is selected in session
             # If not, we might need a general "Censos" record but user said "todo eso se va a poder descargar desde el panel"
