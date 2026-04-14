@@ -63,7 +63,7 @@ async function loadQuotas() {
             const root = {};
 
             quotas.forEach(q => {
-                if (q.value === "Censos") return; // Skip census from summation and display
+                if (q.value && q.value.startsWith("Censos")) return; // Skip census from summation and display
                 const parts = q.category === "General" ? [] : q.category.split(" | ");
                 let current = root;
 

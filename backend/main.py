@@ -336,13 +336,19 @@ def export_study_data(study_code: str, db: Session = Depends(database.get_db)):
         for key, data in grouped_censos.items():
             s = data["sample"]
             q = quota_info.get(s.bot_quota_id)
+            time_val = key[0] # Key is (time_key, phone, interviewer)
+            
+            q_val = "Censos"
+            if q:
+                q_val = q.value
+            
             writer.writerow([
                 s.id,
-                key + ":00", # Hora aproximada del lote
+                time_val + ":00", # Hora aproximada del lote
                 study_code,
                 q.point_type if q else "",
                 q.category if q else "",
-                f"{data['count']} {q.value}", # Ej: "80 Censos"
+                f"{data['count']} {q_val}", # Ej: "80 Censos MB"
                 s.phone_number,
                 s.interviewer_name or ""
             ])
@@ -713,16 +719,21 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             
     # --- DETECCION DE CENSO (TRIGGER) ---
     if user_type == "AGENT" and not media_id:
-        # Check for command: censos <number> [interviewer]
-        # Example: "censos 69 jinny"
-        censos_match = re.search(r"^censos\s+(\d+)(?:\s+(.+))?$", msg)
+        # Support: censo/censos [NSE: mb/mt/ba] <count> [interviewer]
+        # Example: "censos mb 10 juan"
+        censos_match = re.search(r"^(censos?)\s*(mb|mt|ba)?\s*(\d+)(?:\s+(.+))?$", msg)
         if censos_match:
-            count = int(censos_match.group(1))
-            name_token = censos_match.group(2)
+            nse_token = censos_match.group(2)
+            count = int(censos_match.group(3))
+            name_token = censos_match.group(4)
             
             interviewer = None
             if name_token:
                 interviewer = find_interviewer(db_users, name_token)
+            
+            # Find or Create a "Censos" quota for this study. 
+            # If NSE is provided, we use "Censos MB" etc.
+            census_value = "Censos " + nse_token.upper() if nse_token else "Censos"
             
             # Find or Create a "Censos" quota for this study if one is selected in session
             # If not, we might need a general "Censos" record but user said "todo eso se va a poder descargar desde el panel"
@@ -737,7 +748,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             q_censos = db.query(models.BotQuota).filter(
                 models.BotQuota.study_code == study_code,
                 models.BotQuota.category == "General",
-                models.BotQuota.value == "Censos"
+                models.BotQuota.value == census_value
             ).first()
             
             if not q_censos:
@@ -748,7 +759,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 q_censos = models.BotQuota(
                     study_code=study_code,
                     category="General",
-                    value="Censos",
+                    value=census_value,
                     target_count=0,
                     current_count=0,
                     point_type=point_type
@@ -775,7 +786,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 active_phones.append(phone)
             
             target_str = f" a {interviewer}" if interviewer else ""
-            msg_alert = f"📊 *{sender_label}* añadió {count} Censos{target_str} al estudio {study_code}."
+            msg_alert = f"📊 *{sender_label}* añadió {count} {census_value}{target_str} al estudio {study_code}."
             send_quota_report_to_agents(db, study_code, active_phones, msg_alert)
             
             return f"✅ Se han agregado {count} censos{target_str} con éxito.", None
@@ -1668,7 +1679,7 @@ def send_quota_report_to_agents(db, study_code, phones, caption=""):
         # 1. Get components for the image
         all_study_quotas = db.query(models.BotQuota).filter(
             models.BotQuota.study_code == study_code,
-            models.BotQuota.value != "Censos"
+            ~models.BotQuota.value.startswith("Censos")
         ).all()
         if not all_study_quotas:
             print(f"DEBUG: No quotas found for study {study_code}")
@@ -1768,7 +1779,7 @@ def build_study_report(db, study_code):
     
     all_study_quotas = db.query(models.BotQuota).filter(
         models.BotQuota.study_code == study_code,
-        models.BotQuota.value != "Censos"
+        ~models.BotQuota.value.startswith("Censos")
     ).all()
     quota_ids = [q.id for q in all_study_quotas]
     
