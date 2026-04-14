@@ -63,6 +63,7 @@ async function loadQuotas() {
             const root = {};
 
             quotas.forEach(q => {
+                if (q.value === "Censos") return; // Skip census from summation and display
                 const parts = q.category === "General" ? [] : q.category.split(" | ");
                 let current = root;
 
@@ -96,6 +97,9 @@ async function loadQuotas() {
                     <span>ESTUDIO: ${studyCode} ${statusBadge} <span style="font-size:0.8rem; background:rgba(255,255,255,0.2); color:white; padding:2px 8px; border-radius:10px; margin-left:10px;">${quotas.length} ítems</span></span>
                     <div style="display:flex; gap: 8px;">
                         <button onclick="toggleStudyStatus('${studyCode}')" style="background:${lockColor}; color:white; border:none; padding:4px 10px; border-radius:6px; cursor:pointer;" title="${lockTitle}"><i class="fas ${lockIcon}"></i></button>
+                        <button onclick="exportStudyData('${studyCode}')" style="background:#16a34a; color:white; border:none; padding:4px 12px; border-radius:6px; cursor:pointer; font-weight:bold; display:flex; align-items:center; gap:5px;" title="Descargar Reporte Excel">
+                           <i class="fas fa-file-excel"></i> <span>Reporte</span>
+                        </button>
                         <button onclick="editStudy('${studyCode}')" style="background:var(--warning); color:white; border:none; padding:4px 10px; border-radius:6px; cursor:pointer;" title="Editar Estudio"><i class="fas fa-edit"></i></button>
                         <button onclick="deleteStudyGlobal('${studyCode}')" style="background:var(--danger); color:white; border:none; padding:4px 10px; border-radius:6px; cursor:pointer;" title="Eliminar Estudio"><i class="fas fa-trash-alt"></i></button>
                     </div>
@@ -338,6 +342,7 @@ function openModal() {
     document.getElementById('studyCode').value = '';
     document.getElementById('totalSurveys').value = '';
     document.getElementById('studyCode').readOnly = false;
+    document.getElementById('pointType').value = 'General';
     document.querySelectorAll('.category-toggles input[type="checkbox"]').forEach(cb => cb.checked = false);
 
     const ageContainer = document.getElementById('dynamicAgeContainer');
@@ -358,13 +363,14 @@ async function saveBatchQuotas() {
     const studyCode = document.getElementById('studyCode').value.trim();
     if (!studyCode) { alert("Ingresa el ID del estudio"); return; }
 
+    const pointType = document.getElementById('pointType').value;
     const payload = [];
     document.querySelectorAll('.htable-input').forEach(input => {
         const cat = input.getAttribute('data-cat');
         const val = input.getAttribute('data-val');
         const target = parseInt(input.value, 10);
-        if (target > 0) {
-            payload.push({ study_code: studyCode, category: cat, value: val, target_count: target });
+        if (target >= 0) { // Allow 0 to remove/disable quotas if needed
+            payload.push({ study_code: studyCode, category: cat, value: val, target_count: target, point_type: pointType });
         }
     });
 
@@ -392,12 +398,60 @@ async function deleteStudyGlobal(studyCode) {
 }
 
 function editStudy(studyCode) {
-    if (confirm("Si rediseñas las agrupaciones (ej. agregar Género) las cuotas viejas se mantendrán y causarán conflicto. Es recomendable Eliminar el estudio y crearlo desde cero si cambiaste la estructura de árbol. ¿Deseas solo actualizar los objetivos de la estructura actual?")) {
-        document.getElementById('quotaModal').style.display = 'flex';
-        document.getElementById('studyCode').value = studyCode;
-        document.getElementById('studyCode').readOnly = true;
-        document.getElementById('totalSurveys').value = '';
-        document.getElementById('proposalsContainer').innerHTML = '';
+    if (confirm("¿Quieres editar los objetivos de cuota para el estudio " + studyCode + "?")) {
+        // Fetch current quotas for this study to populate the modal
+        fetchWithAuth('/api/quotas?study_code=' + studyCode)
+            .then(res => res.json())
+            .then(data => {
+                const quotas = data[studyCode];
+                if (!quotas) return;
+
+                openModal();
+                document.getElementById('studyCode').value = studyCode;
+                document.getElementById('studyCode').readOnly = true;
+                document.getElementById('pointType').value = quotas[0].point_type || 'General';
+                
+                // We show them in a simplified tree in the proposals container
+                const root = {};
+                quotas.forEach(q => {
+                    const parts = q.category === "General" ? [] : q.category.split(" | ");
+                    let current = root;
+                    parts.forEach((p, idx) => {
+                        if (!current[p]) {
+                            current[p] = (idx === parts.length - 1) ? { __isLeaf: true, __quotas: [] } : {};
+                        }
+                        current = current[p];
+                    });
+                    if (parts.length === 0) {
+                        if (!current['General']) current['General'] = { __isLeaf: true, __quotas: [] };
+                        current = current['General'];
+                    }
+                    current.__quotas.push({ val: q.value, target: q.target_count, dbCat: q.category });
+                });
+
+                const html = renderTreeHtml(root, true, 0, true);
+                document.getElementById('proposalsContainer').innerHTML = `<div class="htable-container" style="border-width:1px; margin-bottom:0;"><div class="htable-root-groups">${html}</div></div>`;
+            });
+    }
+}
+
+async function exportStudyData(studyCode) {
+    try {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`/api/export-data/${studyCode}`);
+        if (!response.ok) throw new Error("Error al descargar");
+        
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `data_${studyCode}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    } catch (e) {
+        console.error(e);
+        alert("Error al descargar los datos.");
     }
 }
 
@@ -424,10 +478,31 @@ async function simulateWebhook() {
         });
 
         const data = await res.json();
+        
+        // Mostrar respuesta de texto
+        responseBox.innerText = (data.reply || "Sin respuesta.");
+        responseBox.style.color = (data.reply && data.reply.includes('❌')) ? 'var(--danger)' : '#166534';
+        responseBox.style.borderColor = (data.reply && data.reply.includes('❌')) ? 'var(--danger)' : '#22c55e';
 
-        responseBox.innerText = data.reply || "Error sin respuesta.";
-        responseBox.style.color = data.reply.includes('❌') ? 'var(--danger)' : '#166534';
-        responseBox.style.borderColor = data.reply.includes('❌') ? 'var(--danger)' : '#22c55e';
+        // Mostrar opciones interactivas si existen
+        if (data.interactive) {
+            const intData = data.interactive;
+            let optHtml = '<div style="margin-top:10px; border-top:1px dashed #ccc; padding-top:10px; color:#475569; font-size:0.9rem;"><strong>Opciones recibidas:</strong><ul style="margin:5px 0; padding-left:20px;">';
+            
+            if (intData.type === 'list') {
+                intData.action.sections.forEach(sec => {
+                    sec.rows.forEach(row => {
+                        optHtml += `<li style="margin-bottom:4px;">${row.id}. ${row.title}</li>`;
+                    });
+                });
+            } else if (intData.type === 'button') {
+                intData.action.buttons.forEach(btn => {
+                    optHtml += `<li style="margin-bottom:4px;">${btn.reply.id}. ${btn.reply.title}</li>`;
+                });
+            }
+            optHtml += '</ul><small>(Escribe el número de la opción arriba para responder)</small></div>';
+            responseBox.innerHTML += optHtml;
+        }
 
         loadQuotas();
     } catch (e) {

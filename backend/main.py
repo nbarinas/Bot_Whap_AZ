@@ -9,6 +9,9 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 from . import models, database, auth, render_utils, upload_media
 import re
+import io
+import csv
+from fastapi import Response
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.join(os.path.dirname(BASE_DIR), "frontend")
@@ -128,6 +131,20 @@ def on_startup():
     except Exception:
         pass # Column presumably exists
         
+    try:
+        from sqlalchemy import text
+        with database.bot_engine.begin() as conn:
+            conn.execute(text("ALTER TABLE bot_quotas ADD COLUMN point_type TEXT"))
+    except Exception:
+        pass
+        
+    try:
+        from sqlalchemy import text
+        with database.bot_engine.begin() as conn:
+            conn.execute(text("ALTER TABLE quota_submissions ADD COLUMN interviewer_name TEXT"))
+    except Exception:
+        pass
+        
     asyncio.create_task(call_reminder_task())
 
 @app.get("/")
@@ -161,6 +178,7 @@ class QuotaCreateUpdate(BaseModel):
     category: str
     value: str
     target_count: int
+    point_type: Optional[str] = None
 
 @app.get("/api/quotas")
 def get_bot_quotas(study_code: Optional[str] = None, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
@@ -179,7 +197,8 @@ def get_bot_quotas(study_code: Optional[str] = None, db: Session = Depends(datab
             "value": q.value,
             "target_count": q.target_count,
             "current_count": q.current_count,
-            "is_closed": q.is_closed
+            "is_closed": q.is_closed,
+            "point_type": q.point_type
         })
     return result
 
@@ -193,6 +212,7 @@ def create_or_update_quota(quota_in: QuotaCreateUpdate, db: Session = Depends(da
     
     if quota:
         quota.target_count = quota_in.target_count
+        quota.point_type = quota_in.point_type
         db.commit()
         db.refresh(quota)
         return {"msg": "Quota updated", "id": quota.id}
@@ -202,7 +222,8 @@ def create_or_update_quota(quota_in: QuotaCreateUpdate, db: Session = Depends(da
             category=quota_in.category,
             value=quota_in.value,
             target_count=quota_in.target_count,
-            current_count=0
+            current_count=0,
+            point_type=quota_in.point_type
         )
         db.add(new_quota)
         db.commit()
@@ -221,6 +242,7 @@ def create_or_update_quotas_batch(quotas_in: list[QuotaCreateUpdate], db: Sessio
         
         if quota:
             quota.target_count = quota_in.target_count
+            quota.point_type = quota_in.point_type
             db.commit()
             db.refresh(quota)
             results.append(quota.id)
@@ -230,7 +252,8 @@ def create_or_update_quotas_batch(quotas_in: list[QuotaCreateUpdate], db: Sessio
                 category=quota_in.category,
                 value=quota_in.value,
                 target_count=quota_in.target_count,
-                current_count=0
+                current_count=0,
+                point_type=quota_in.point_type
             )
             db.add(new_quota)
             db.commit()
@@ -258,6 +281,88 @@ def delete_study(study_code: str, db: Session = Depends(database.get_db), curren
         db.delete(q)
     db.commit()
     return {"msg": "Study deleted"}
+
+@app.get("/api/export-data/{study_code}")
+def export_study_data(study_code: str, db: Session = Depends(database.get_db)):
+    
+    try:
+        quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
+        q_ids = [q.id for q in quotas]
+        quota_info = {q.id: q for q in quotas}
+        
+        submissions = db.query(models.QuotaSubmission).filter(
+            models.QuotaSubmission.bot_quota_id.in_(q_ids),
+            models.QuotaSubmission.is_deleted == 0
+        ).order_by(models.QuotaSubmission.submitted_at.asc()).all()
+        
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["ID", "Fecha", "Estudio", "Tipo de Punto", "Categoría", "Valor", "Número Celular", "Encuestador"])
+        
+        regular_subs = []
+        censos_subs = []
+        
+        for s in submissions:
+            q = quota_info.get(s.bot_quota_id)
+            if q and q.category == "General" and q.value == "Censos":
+                censos_subs.append(s)
+            else:
+                regular_subs.append(s)
+                
+        # 1. Escribir encuestas regulares (una a una)
+        for s in regular_subs:
+            q = quota_info.get(s.bot_quota_id)
+            writer.writerow([
+                s.id,
+                s.submitted_at.strftime("%Y-%m-%d %H:%M:%S") if s.submitted_at else "",
+                study_code,
+                q.point_type if q else "",
+                q.category if q else "",
+                q.value if q else "",
+                s.phone_number,
+                s.interviewer_name or ""
+            ])
+            
+        # 2. Escribir censos agrupados por lote (mismo minuto, mismo encuestador)
+        grouped_censos = {}
+        for s in censos_subs:
+            # Agrupamos por minuto para capturar el "lote" enviado
+            time_key = s.submitted_at.strftime("%Y-%m-%d %H:%M") 
+            key = (time_key, s.phone_number, s.interviewer_name)
+            if key not in grouped_censos:
+                grouped_censos[key] = {"count": 0, "sample": s}
+            grouped_censos[key]["count"] += 1
+            
+        for key, data in grouped_censos.items():
+            s = data["sample"]
+            q = quota_info.get(s.bot_quota_id)
+            writer.writerow([
+                s.id,
+                key + ":00", # Hora aproximada del lote
+                study_code,
+                q.point_type if q else "",
+                q.category if q else "",
+                f"{data['count']} {q.value}", # Ej: "80 Censos"
+                s.phone_number,
+                s.interviewer_name or ""
+            ])
+        
+        output.seek(0)
+        # Codificar en UTF-8 con BOM (sig) para compatibilidad nativa con Excel
+        final_content = output.getvalue().encode('utf-8-sig')
+        
+        return Response(
+            content=final_content,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=data_{study_code}.csv"}
+        )
+    except Exception as ex:
+        import traceback
+        err_msg = traceback.format_exc()
+        print(f"EXPORT ERROR: {err_msg}")
+        with open("export_error.log", "a") as f:
+            f.write(f"\n[{datetime.now()}] ERROR: {err_msg}")
+        raise HTTPException(status_code=500, detail=str(ex))
 
 @app.put("/api/quotas/study/{study_code}/toggle-status")
 def toggle_study_status(study_code: str, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
@@ -608,6 +713,73 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             
     # --- DETECCION DE CENSO (TRIGGER) ---
     if user_type == "AGENT" and not media_id:
+        # Check for command: censos <number> [interviewer]
+        # Example: "censos 69 jinny"
+        censos_match = re.search(r"^censos\s+(\d+)(?:\s+(.+))?$", msg)
+        if censos_match:
+            count = int(censos_match.group(1))
+            name_token = censos_match.group(2)
+            
+            interviewer = None
+            if name_token:
+                interviewer = find_interviewer(db_users, name_token)
+            
+            # Find or Create a "Censos" quota for this study if one is selected in session
+            # If not, we might need a general "Censos" record but user said "todo eso se va a poder descargar desde el panel"
+            # We'll look for the first active study the agent is subscribed to
+            sub = db.query(models.BotStudySubscription).filter(models.BotStudySubscription.phone_number == phone).order_by(models.BotStudySubscription.subscribed_at.desc()).first()
+            if not sub:
+                return "❌ Debes seleccionar un estudio primero (escribe 'Hola').", None
+            
+            study_code = sub.study_code
+            
+            # Find or Create a "Censos" quota row
+            q_censos = db.query(models.BotQuota).filter(
+                models.BotQuota.study_code == study_code,
+                models.BotQuota.category == "General",
+                models.BotQuota.value == "Censos"
+            ).first()
+            
+            if not q_censos:
+                # Find point_type from any other quota of the same study
+                existing_q = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).first()
+                point_type = existing_q.point_type if existing_q else "General"
+                
+                q_censos = models.BotQuota(
+                    study_code=study_code,
+                    category="General",
+                    value="Censos",
+                    target_count=0,
+                    current_count=0,
+                    point_type=point_type
+                )
+                db.add(q_censos)
+                db.commit()
+                db.refresh(q_censos)
+            
+            # Add multiple submissions for the census count
+            for _ in range(count):
+                new_sub = models.QuotaSubmission(
+                    bot_quota_id=q_censos.id,
+                    phone_number=phone,
+                    interviewer_name=interviewer,
+                    is_deleted=0
+                )
+                db.add(new_sub)
+            
+            q_censos.current_count += count
+            db.commit()
+            
+            active_phones = get_daily_active_phones_for_study(db, study_code)
+            if phone not in active_phones:
+                active_phones.append(phone)
+            
+            target_str = f" a {interviewer}" if interviewer else ""
+            msg_alert = f"📊 *{sender_label}* añadió {count} Censos{target_str} al estudio {study_code}."
+            send_quota_report_to_agents(db, study_code, active_phones, msg_alert)
+            
+            return f"✅ Se han agregado {count} censos{target_str} con éxito.", None
+
         censo_match = re.search(r"censo\s*(\d+)", msg)
         if censo_match:
             censo_num = censo_match.group(1)
@@ -663,11 +835,17 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
     
     timeout_message = ""
     if session and session.updated_at:
-        now = datetime.now() # Use local server time
-        session_time = session.updated_at.replace(tzinfo=None)
+        from datetime import timezone
+        now = datetime.now(timezone.utc)
+        session_time = session.updated_at
         
+        # Ensure session_time is aware if it's not (SQLite sometimes returns naive UTC)
+        if session_time.tzinfo is None:
+            session_time = session_time.replace(tzinfo=timezone.utc)
+            
         # If difference is more than 5 minutes (300 seconds)
-        if abs((now - session_time).total_seconds()) > 300:
+        diff = (now - session_time).total_seconds()
+        if abs(diff) > 300:
             db.delete(session)
             db.commit()
             session = None
@@ -1000,10 +1178,23 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 quota_id = ctx.get("free_text_quota_id")
                 quota = db.query(models.BotQuota).get(quota_id)
                 if quota:
+                    q_label = f"{quota.category} | {quota.value}" if quota.category != "General" else quota.value
+                    
+                    # Interceptor: See if the message has an interviewer name
+                    # Message tokens might be "mb hombre jinny". matched_quota used some tokens.
+                    # We'll take tokens NOT used by the quota logic or just the last token.
+                    msg_tokens = re.findall(r'[a-z0-9\-]+', message_raw.lower())
+                    interviewer = None
+                    if len(msg_tokens) > 0:
+                        last_token = msg_tokens[-1]
+                        # Verify if this token matches an interviewer
+                        interviewer = find_interviewer(db_users, last_token)
+
                     sub = models.QuotaSubmission(
                         bot_quota_id=quota.id,
                         phone_number=phone,
-                        is_deleted=0
+                        is_deleted=0,
+                        interviewer_name=interviewer
                     )
                     db.add(sub)
                     quota.current_count += 1
@@ -1435,7 +1626,10 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 reply, interactive_data, ctx = handle_invalid("Opción inválida.", "1. Sí, acepto\n2. No acepto", ctx.get("interactive_fallback"))
     # End of if not is_media_unsupported
 
+    from datetime import timezone
+    session.state = session.state # Just to be sure SQLAlchemy detects it
     session.context_data = json.dumps(ctx)
+    session.updated_at = datetime.now(timezone.utc)
     db.commit()
     
     # Log everything in BotQuotaUpdate
@@ -1472,7 +1666,10 @@ def send_quota_report_to_agents(db, study_code, phones, caption=""):
         from . import models, render_utils, upload_media
         
         # 1. Get components for the image
-        all_study_quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
+        all_study_quotas = db.query(models.BotQuota).filter(
+            models.BotQuota.study_code == study_code,
+            models.BotQuota.value != "Censos"
+        ).all()
         if not all_study_quotas:
             print(f"DEBUG: No quotas found for study {study_code}")
             return
@@ -1569,7 +1766,10 @@ def build_study_report(db, study_code):
     today = date.today()
     start_of_day = datetime(today.year, today.month, today.day)
     
-    all_study_quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
+    all_study_quotas = db.query(models.BotQuota).filter(
+        models.BotQuota.study_code == study_code,
+        models.BotQuota.value != "Censos"
+    ).all()
     quota_ids = [q.id for q in all_study_quotas]
     
     matrix_msg = f"📊 *Estado General: {study_code.upper()}*\n"
@@ -1792,6 +1992,21 @@ def check_free_text_quota(db, study_code: str, msg: str):
         
     return None, ""
 
+def find_interviewer(db_users, name_token: str):
+    if not name_token: return None
+    try:
+        sql = text("SELECT full_name, username FROM users WHERE LOWER(full_name) LIKE :t OR LOWER(username) LIKE :t LIMIT 1")
+        res = db_users.execute(sql, {"t": f"%{name_token.lower()}%"}).first()
+        if res:
+            return res.full_name or res.username
+    except Exception:
+        # Fallback if full_name is missing
+        sql = text("SELECT username FROM users WHERE LOWER(username) LIKE :t LIMIT 1")
+        res = db_users.execute(sql, {"t": f"%{name_token.lower()}%"}).first()
+        if res:
+            return res.username
+    return None
+
 def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tuple[str, str, dict]:
 
     study_code = ctx["study_code"]
@@ -1830,6 +2045,8 @@ def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tupl
             phone_number=phone,
             is_deleted=0
         )
+        # Note: Interactive selection currently doesn't support adding interviewer name via text in same message
+        # but we could potentially add a state for it if requested. For now, interviewer is only for fast mode.
         db.add(sub)
         quota.current_count += 1
         

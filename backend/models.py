@@ -23,6 +23,7 @@ class BotQuota(Base):
     target_count = Column(Integer, default=0) 
     current_count = Column(Integer, default=0) 
     is_closed = Column(Integer, default=0) # 0 = open, 1 = closed
+    point_type = Column(String(100), nullable=True) 
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -66,6 +67,7 @@ class QuotaSubmission(Base):
     phone_number = Column(String(50), index=True) 
     submitted_at = Column(DateTime(timezone=True), server_default=func.now())
     is_deleted = Column(Integer, default=0) # Soft delete (0=active, 1=deleted)
+    interviewer_name = Column(String(100), nullable=True)
 
 class BotSession(Base):
     __tablename__ = "bot_sessions"
