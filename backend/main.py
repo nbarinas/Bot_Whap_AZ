@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Form, File, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -140,11 +140,11 @@ def on_startup():
         
     try:
         from sqlalchemy import text
-        with database.bot_engine.begin() as conn:
-            conn.execute(text("ALTER TABLE quota_submissions ADD COLUMN interviewer_name TEXT"))
+        with database.users_engine.begin() as conn:
+            conn.execute(text("ALTER TABLE calls ADD COLUMN reminder_sent INTEGER DEFAULT 0"))
     except Exception:
         pass
-        
+
     asyncio.create_task(call_reminder_task())
 
 @app.get("/")
@@ -198,9 +198,73 @@ def get_bot_quotas(study_code: Optional[str] = None, db: Session = Depends(datab
             "target_count": q.target_count,
             "current_count": q.current_count,
             "is_closed": q.is_closed,
-            "point_type": q.point_type
+            "point_type": q.point_type,
+            "study_type": q.study_type or 'STANDARD',
+            "store_id": q.store_id,
+            "planned_supervisor": q.planned_supervisor,
+            "planned_interviewer": q.planned_interviewer
         })
     return result
+
+@app.post("/api/quotas/tdc-upload")
+async def upload_tdc_study(study_code: str = Form(...), file: UploadFile = File(...), db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
+    """Upload an Excel file to create a TDC study (one row per store)."""
+    import pandas as pd
+    import io
+    
+    contents = await file.read()
+    try:
+        df = pd.read_excel(io.BytesIO(contents))
+    except Exception:
+        df = pd.read_csv(io.BytesIO(contents))
+    
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    
+    # Flexible column mapping
+    col_map = {}
+    for col in df.columns:
+        if col in ['n', '#', 'num', 'numero', 'número']: col_map['n'] = col
+        elif 'barrio' in col: col_map['barrio'] = col
+        elif 'nombre' in col or 'tienda' in col or 'store' in col: col_map['nombre'] = col
+        elif 'encuestador' in col or 'interviewer' in col: col_map['encuestador'] = col
+        elif 'supervisor' in col: col_map['supervisor'] = col
+        elif 'fecha' in col or 'date' in col or 'dia' in col or 'día' in col: col_map['fecha'] = col
+    
+    # Delete existing quotas for this study
+    db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).delete()
+    db.commit()
+    
+    created = 0
+    for _, row in df.iterrows():
+        try:
+            store_num = int(row.get(col_map.get('n', ''), 0))
+            barrio = str(row.get(col_map.get('barrio', ''), '')).strip()
+            nombre = str(row.get(col_map.get('nombre', ''), '')).strip()
+            encuestador = str(row.get(col_map.get('encuestador', ''), '')).strip()
+            supervisor = str(row.get(col_map.get('supervisor', ''), '')).strip()
+            fecha = str(row.get(col_map.get('fecha', ''), '')).strip()
+            
+            if not barrio or not nombre: continue
+            
+            quota = models.BotQuota(
+                study_code=study_code,
+                category=barrio,
+                value=f"{store_num} - {nombre}",
+                target_count=1,
+                current_count=0,
+                point_type='General',
+                study_type='TDC',
+                store_id=store_num,
+                planned_supervisor=supervisor,
+                planned_interviewer=encuestador
+            )
+            db.add(quota)
+            created += 1
+        except Exception:
+            continue
+    
+    db.commit()
+    return {"msg": f"✅ Estudio TDC '{study_code}' creado con {created} tiendas."}
 
 @app.post("/api/quotas")
 def create_or_update_quota(quota_in: QuotaCreateUpdate, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
