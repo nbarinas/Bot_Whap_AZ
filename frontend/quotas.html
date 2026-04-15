@@ -430,6 +430,7 @@
                 de Cuotas</h1>
             <div style="display:flex; gap:10px; flex-wrap:wrap;">
                 <button class="btn-primary" onclick="openAgentsModal()" style="background:#0ea5e9;"><i class="fas fa-users"></i> Encuestadores</button>
+                <button class="btn-primary" onclick="openTdcModal()" style="background:#8b5cf6;"><i class="fas fa-store"></i> Nuevo TDC</button>
                 <button class="btn-primary" onclick="openModal()">+ Configurar Estudio</button>
                 <button onclick="logout()"
                     style="background:var(--danger); color:white; border:none; padding:1rem; border-radius:12px; cursor:pointer; font-weight:700;"><i
@@ -487,18 +488,7 @@
                     </div>
                 </div>
 
-                <div class="form-group">
-                    <label>Tipo de Punto</label>
-                    <select id="pointType" style="width: 100%; padding: 0.8rem 1rem; border-radius: 10px; border: 2px solid var(--border-color); background: #f8fafc; font-size: 1.1rem; font-weight: 600; box-sizing: border-box;">
-                        <option value="General">General (Sin especificar)</option>
-                        <option value="Centro comercial">Centro comercial</option>
-                        <option value="Iglesia">Iglesia</option>
-                        <option value="Parque">Parque</option>
-                        <option value="Plaza/Plazoleta">Plaza/Plazoleta</option>
-                        <option value="Colegio/Universidad">Colegio/Universidad</option>
-                        <option value="Otros">Otros</option>
-                    </select>
-                </div>
+                <!-- Point Type removed as dropdown, now handled as dim -->
 
                 <div class="form-group">
                     <label style="text-align:center; margin-bottom:10px;">Elige agrupaciones (Prioridad Izq a
@@ -506,9 +496,9 @@
                     <div class="category-toggles" id="categoryToggles">
                         <label><input type="checkbox" value="Género" onchange="generateProposals()"> Género</label>
                         <label><input type="checkbox" value="Región" onchange="generateProposals()"> Región</label>
-                        <label><input type="checkbox" id="chkEdad" value="Edad" onchange="toggleAgeInputs()">
-                            Edad</label>
+                        <label><input type="checkbox" id="chkEdad" value="Edad" onchange="toggleAgeInputs()"> Edad</label>
                         <label><input type="checkbox" value="NSE" onchange="generateProposals()"> NSE</label>
+                        <label><input type="checkbox" id="chkPointType" value="Tipo de Punto" onchange="togglePointTypeInputs()"> Tipo de Punto</label>
                     </div>
                 </div>
 
@@ -528,6 +518,21 @@
                     <button type="button" onclick="addAgeRange()"
                         style="background:white; border:2px dashed var(--primary-color); color:var(--primary-color); padding:6px 12px; border-radius:8px; cursor:pointer; font-weight:700; font-size:0.95rem; width:100%;"><i
                             class="fas fa-plus"></i> Añadir Otro Rango</button>
+                </div>
+
+                <!-- Custom Point Type inputs -->
+                <div id="dynamicPointTypeContainer"
+                    style="display:none; margin-bottom:1rem; padding:1rem; background:#f0f9ff; border:1px solid #bae6fd; border-radius:10px;">
+                    <label style="font-weight:700; margin-bottom:0.8rem; display:block; color:#0369a1;"><i
+                            class="fas fa-map-marker-alt"></i> Tipos de Puntos (Ej: Parque, Iglesia...)</label>
+                    <div id="pointTypeInputsList" style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+                        <input type="text" class="point-type-input-field" value="General"
+                            style="width:140px; padding:6px; border:1px solid #ccc; border-radius:5px; text-align:center; font-weight:600;"
+                            oninput="generateProposals()">
+                    </div>
+                    <button type="button" onclick="addPointTypeItem()"
+                        style="background:white; border:2px dashed #0369a1; color:#0369a1; padding:6px 12px; border-radius:8px; cursor:pointer; font-weight:700; font-size:0.95rem; width:100%;"><i
+                            class="fas fa-plus"></i> Añadir Otro Punto</button>
                 </div>
 
                 <div id="proposalsContainer"></div>
@@ -554,7 +559,34 @@
         </div>
     </div>
 
-    <script src="/static/quotas.js?v=20"></script>
+
+    <!-- TDC Modal -->
+    <div id="tdcModal" class="modal" style="display:none;">
+        <div class="modal-content" style="max-width:500px;">
+            <h2 style="margin:0 0 1rem 0; font-size:1.5rem; font-weight:800; text-align:center;"><i class="fas fa-store"></i> Crear Estudio TDC</h2>
+            <p style="text-align:center; color:var(--text-muted); margin-bottom:1.5rem; font-size:0.9rem;">Carga el Excel con las tiendas del mes.</p>
+            <div class="modal-body">
+                <div style="background:#f1f5f9; padding:12px; border-radius:10px; margin-bottom:15px; font-size:0.8rem; border-left:4px solid #8b5cf6;">
+                    <strong>💡 Formato esperado del Excel:</strong><br>
+                    <code style="display:block; margin-top:5px; background:#fff; padding:5px; border-radius:4px;">n | barrio | nombre tienda | encuestador | supervisor | fecha</code>
+                </div>
+                <div class="form-group">
+                    <label>ID del Estudio (Mes/Año)</label>
+                    <input type="text" id="tdcStudyCode" placeholder="Ej: TDC-ABRIL" required>
+                </div>
+                <div class="form-group">
+                    <label>Archivo Excel</label>
+                    <input type="file" id="tdcFile" accept=".xlsx,.xls,.csv" style="width:100%; padding:10px; border:2px solid var(--border-color); border-radius:12px; background:#f8fafc;">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button onclick="closeTdcModal()" class="btn-cancel">Cerrar</button>
+                <button onclick="uploadTdc()" class="btn-primary" id="btnUploadTdc" style="background:#8b5cf6;">Cargar y Crear</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/quotas.js?v=23"></script>
 </body>
 
 </html>

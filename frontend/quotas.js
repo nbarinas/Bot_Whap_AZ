@@ -37,7 +37,7 @@ const DEFAULT_CATEGORIES = {
     "NSE": ["MT", "MB", "BA"]
 };
 
-const PRIORITY_ORDER = ["Género", "Región", "Edad", "NSE"];
+const PRIORITY_ORDER = ["Tipo de Punto", "Género", "Región", "Edad", "NSE"];
 const cartesian = (...a) => a.reduce((acc, b) => acc.flatMap(d => b.map(e => [d, e].flat())));
 
 async function loadQuotas() {
@@ -83,7 +83,8 @@ async function loadQuotas() {
             });
 
             enrichWithTotals(root);
-            const html = renderTreeHtml(root, true);
+            const studyType = (quotas.length > 0 && quotas[0].study_type) ? quotas[0].study_type : 'STANDARD';
+            const html = studyType === 'TDC' ? renderTdcGridHtml(quotas) : renderTreeHtml(root, true);
 
             const statusBadge = isClosed ? '<span style="background:var(--text-muted); color:white; padding:2px 8px; border-radius:10px; margin-left:10px; font-size:0.8rem;"><i class="fas fa-archive"></i> Cerrado</span>' : '';
             const lockIcon = isClosed ? 'fa-lock-open' : 'fa-lock';
@@ -125,7 +126,7 @@ function renderTreeHtml(node, isRoot = false, level = 0, isProposal = false) {
             if (isProposal) {
                 bodyHtml += `
                     <div>
-                        <input type="number" class="htable-input" value="${q.target}" data-cat="${q.dbCat}" data-val="${q.val}" min="0">
+                        <input type="number" class="htable-input" value="${q.target}" data-cat="${q.dbCat}" data-val="${q.val}" data-point="${q.point || 'General'}" min="0">
                     </div>
                 `;
             } else {
@@ -248,6 +249,25 @@ function addAgeRange() {
     generateProposals();
 }
 
+function togglePointTypeInputs() {
+    const isChecked = document.getElementById('chkPointType').checked;
+    const container = document.getElementById('dynamicPointTypeContainer');
+    if (container) container.style.display = isChecked ? 'block' : 'none';
+    generateProposals();
+}
+
+function addPointTypeItem() {
+    const list = document.getElementById('pointTypeInputsList');
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'point-type-input-field';
+    input.placeholder = 'Punto X';
+    input.style = 'width:140px; padding:6px; border:1px solid #ccc; border-radius:5px; text-align:center; font-weight:600;';
+    input.oninput = generateProposals;
+    list.appendChild(input);
+    generateProposals();
+}
+
 function generateProposals() {
     const total = parseInt(document.getElementById('totalSurveys').value, 10) || 0;
     let checkboxes = Array.from(document.querySelectorAll('.category-toggles input[type="checkbox"]:checked')).map(cb => cb.value);
@@ -278,6 +298,9 @@ function generateProposals() {
     if (minorCat === "Edad") {
         const ageInputs = Array.from(document.querySelectorAll('.age-input-field')).map(i => i.value.trim()).filter(v => v !== "");
         minorArrays = ageInputs.length > 0 ? ageInputs : ["Total"];
+    } else if (minorCat === "Tipo de Punto") {
+        const ptInputs = Array.from(document.querySelectorAll('.point-type-input-field')).map(i => i.value.trim()).filter(v => v !== "");
+        minorArrays = ptInputs.length > 0 ? ptInputs : ["General"];
     } else {
         minorArrays = DEFAULT_CATEGORIES[minorCat];
         if (!minorArrays || minorArrays.length === 0) minorArrays = ["Total"];
@@ -289,6 +312,10 @@ function generateProposals() {
             if (cat === "Edad") {
                 const ageInputs = Array.from(document.querySelectorAll('.age-input-field')).map(i => i.value.trim()).filter(v => v !== "");
                 return ageInputs.length > 0 ? ageInputs : ["Total"];
+            }
+            if (cat === "Tipo de Punto") {
+                const ptInputs = Array.from(document.querySelectorAll('.point-type-input-field')).map(i => i.value.trim()).filter(v => v !== "");
+                return ptInputs.length > 0 ? ptInputs : ["General"];
             }
             return DEFAULT_CATEGORIES[cat] || ["Total"];
         });
@@ -325,10 +352,19 @@ function generateProposals() {
             let target = baseTarget;
             if (remainder > 0) { target += 1; remainder -= 1; }
 
+            // Track point name for DB column if it's one of the parts
+            let rowPoint = "General";
+            if (minorCat === "Tipo de Punto") rowPoint = minorVal;
+            else if (majorCats.includes("Tipo de Punto")) {
+                const ptIdx = majorCats.indexOf("Tipo de Punto");
+                rowPoint = majorComboArray[ptIdx];
+            }
+
             current.__quotas.push({
                 val: minorVal,
                 target: target,
-                dbCat: dbCategory
+                dbCat: dbCategory,
+                point: rowPoint
             });
         });
     });
@@ -345,12 +381,11 @@ function openModal() {
     document.getElementById('pointType').value = 'General';
     document.querySelectorAll('.category-toggles input[type="checkbox"]').forEach(cb => cb.checked = false);
 
-    const ageContainer = document.getElementById('dynamicAgeContainer');
-    if (ageContainer) {
-        ageContainer.style.display = 'none';
-        document.getElementById('ageInputsList').innerHTML = `
-            <input type="text" class="age-input-field" value="18-30" style="width:100px; padding:6px; border:1px solid #ccc; border-radius:5px; text-align:center; font-weight:600;" oninput="generateProposals()">
-            <input type="text" class="age-input-field" value="31-45" style="width:100px; padding:6px; border:1px solid #ccc; border-radius:5px; text-align:center; font-weight:600;" oninput="generateProposals()">
+    const ptContainer = document.getElementById('dynamicPointTypeContainer');
+    if (ptContainer) {
+        ptContainer.style.display = 'none';
+        document.getElementById('pointTypeInputsList').innerHTML = `
+            <input type="text" class="point-type-input-field" value="General" style="width:140px; padding:6px; border:1px solid #ccc; border-radius:5px; text-align:center; font-weight:600;" oninput="generateProposals()">
         `;
     }
 
@@ -363,14 +398,14 @@ async function saveBatchQuotas() {
     const studyCode = document.getElementById('studyCode').value.trim();
     if (!studyCode) { alert("Ingresa el ID del estudio"); return; }
 
-    const pointType = document.getElementById('pointType').value;
     const payload = [];
     document.querySelectorAll('.htable-input').forEach(input => {
         const cat = input.getAttribute('data-cat');
         const val = input.getAttribute('data-val');
+        const rowPoint = input.getAttribute('data-point') || 'General';
         const target = parseInt(input.value, 10);
-        if (target >= 0) { // Allow 0 to remove/disable quotas if needed
-            payload.push({ study_code: studyCode, category: cat, value: val, target_count: target, point_type: pointType });
+        if (target >= 0) {
+            payload.push({ study_code: studyCode, category: cat, value: val, target_count: target, point_type: rowPoint });
         }
     });
 
@@ -409,7 +444,7 @@ function editStudy(studyCode) {
                 openModal();
                 document.getElementById('studyCode').value = studyCode;
                 document.getElementById('studyCode').readOnly = true;
-                document.getElementById('pointType').value = quotas[0].point_type || 'General';
+                // Note: We don't restore checkboxes/categories easily here for now as it's a batch edit
                 
                 // We show them in a simplified tree in the proposals container
                 const root = {};
@@ -582,3 +617,63 @@ async function toggleAgentStatus(phone, isActive) {
     }
 }
 
+// ============================================================
+// TDC MODULE - Funciones para estudios de tipo TDC
+// ============================================================
+
+function openTdcModal() {
+    document.getElementById('tdcModal').style.display = 'flex';
+    document.getElementById('tdcStudyCode').value = '';
+    document.getElementById('tdcFile').value = '';
+}
+
+function closeTdcModal() {
+    document.getElementById('tdcModal').style.display = 'none';
+}
+
+async function uploadTdc() {
+    const studyCode = document.getElementById('tdcStudyCode').value.trim();
+    const fileInput = document.getElementById('tdcFile');
+    const btn = document.getElementById('btnUploadTdc');
+    if (!studyCode) { alert('Ingresa el ID del estudio'); return; }
+    if (fileInput.files.length === 0) { alert('Selecciona un archivo Excel'); return; }
+    const formData = new FormData();
+    formData.append('study_code', studyCode);
+    formData.append('file', fileInput.files[0]);
+    btn.disabled = true;
+    btn.innerText = '⏳ Cargando...';
+    try {
+        const token = localStorage.getItem('token');
+        const res = await fetch('/api/quotas/tdc-upload', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: formData
+        });
+        const data = await res.json();
+        if (res.ok) { alert(data.msg); closeTdcModal(); loadQuotas(); }
+        else { alert(data.detail || 'Error al cargar'); }
+    } catch (e) { console.error(e); alert('Error de conexión'); }
+    finally { btn.disabled = false; btn.innerText = 'Cargar y Crear'; }
+}
+
+function renderTdcGridHtml(quotas) {
+    const sorted = [...quotas].sort((a, b) => (a.store_id || 0) - (b.store_id || 0));
+    const COLS = 5;
+    let html = '<div style="display:grid; grid-template-columns:repeat(5,1fr); gap:10px; padding:12px;">';
+    sorted.forEach(q => {
+        const done = q.current_count >= q.target_count;
+        const color = done ? '#10b981' : '#3b82f6';
+        const bg = done ? '#d1fae5' : '#eff6ff';
+        const storeName = (q.value || '').split(' - ').pop();
+        const shortName = storeName.length > 20 ? storeName.substring(0, 18) + '..' : storeName;
+        html += `
+            <div style="background:${bg}; border:2px solid ${color}; border-radius:10px; padding:10px; text-align:center;">
+                <div style="font-size:0.7rem; color:#64748b; text-transform:uppercase; margin-bottom:2px;">${q.category}</div>
+                <div style="font-size:1.8rem; font-weight:900; color:#0f172a; line-height:1;">${q.store_id || '?'}</div>
+                <div style="font-size:0.72rem; color:#334155; margin:4px 0;">${shortName}</div>
+                <div style="font-size:0.8rem; font-weight:700; color:${color};">${q.current_count} / ${q.target_count}</div>
+            </div>`;
+    });
+    html += '</div>';
+    return html;
+}
