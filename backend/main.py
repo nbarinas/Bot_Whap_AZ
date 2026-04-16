@@ -1208,8 +1208,9 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             else:
                 # Try free-text fast match
                 study_code = ctx.get("study_code")
-                matched_quotas, err_msg = check_free_text_quota(db, study_code, msg)
+                matched_quotas, name_found, err_msg = check_free_text_quota(db, study_code, msg)
                 if matched_quotas:
+                    ctx["free_text_name"] = name_found
                     q_names = []
                     q_ids = []
                     for q in matched_quotas:
@@ -1259,8 +1260,9 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     reply, interactive_data, ctx = handle_invalid("Opción inválida.", opts_text, ctx.get("interactive_fallback"))
             except ValueError:
                 study_code = ctx.get("study_code")
-                matched_quotas, err_msg = check_free_text_quota(db, study_code, msg)
+                matched_quotas, name_found, err_msg = check_free_text_quota(db, study_code, msg)
                 if matched_quotas:
+                    ctx["free_text_name"] = name_found
                     q_names = []
                     q_ids = []
                     for q in matched_quotas:
@@ -1296,12 +1298,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     quota_ids = [ctx.get("free_text_quota_id")]
                 
                 if quota_ids:
-                    # Interceptor: See if the message has an interviewer name
-                    msg_tokens = re.findall(r'[a-z0-9\-]+', message_raw.lower())
-                    interviewer = None
-                    if len(msg_tokens) > 0:
-                        last_token = msg_tokens[-1]
-                        interviewer = find_interviewer(db_users, last_token)
+                    interviewer = ctx.get("free_text_name", "no tiene")
 
                     study_code = ctx.get("study_code")
                     labels = []
@@ -2063,38 +2060,31 @@ def check_free_text_quota(db, study_code: str, msg: str):
         if not text: return []
         return re.findall(r'[a-z0-9\-]+', text.lower())
 
-    def is_token_match(quota_token, message_tokens):
-        if quota_token in message_tokens:
-            return True
-        
-        # Point Type Alias Check
-        for canonical, aliases in POINT_TYPE_ALIASES.items():
-            canonical_tokens = get_tokens(canonical)
-            if quota_token in canonical_tokens:
-                # If the quota token is part of a canonical name (e.g. "centro"),
-                # check if any of its aliases are in the message (e.g. "cc")
-                if any(al in message_tokens for al in aliases):
-                    return True
+    msg_tokens_list = get_tokens(msg)
+    if not msg_tokens_list:
+        return [], "", ""
 
-        # Range logic: if quota is "10-14" and message has "12"
-        range_match = re.match(r'^(\d+)-(\d+)$', quota_token)
-        if range_match:
-            try:
-                low, high = map(int, range_match.groups())
-                for mt in message_tokens:
+    def get_matched_token_indices(quota_token, message_tokens):
+        matches = []
+        for i, mt in enumerate(message_tokens):
+            if quota_token == mt:
+                matches.append(i)
+                continue
+            for canonical, aliases in POINT_TYPE_ALIASES.items():
+                if quota_token in get_tokens(canonical):
+                    if mt in aliases:
+                        matches.append(i)
+                        break
+            range_match = re.match(r'^(\d+)-(\d+)$', quota_token)
+            if range_match:
+                try:
+                    low, high = map(int, range_match.groups())
                     if mt.isdigit() and low <= int(mt) <= high:
-                        return True
-            except (ValueError, TypeError):
-                pass
-        return False
-
-    msg_tokens = set(get_tokens(msg))
-    if not msg_tokens:
-        return [], ""
+                        matches.append(i)
+                except (ValueError, TypeError): pass
+        return matches
 
     quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
-    
-    # We want to find the best match for Standard categories AND the best match for "Tipo de Punto"
     standard_matches = []
     point_matches = []
     
@@ -2107,62 +2097,67 @@ def check_free_text_quota(db, study_code: str, msg: str):
              parts = [x.strip().lower() for x in cat_part.split("|") if x.strip()] + [q.value.lower().strip()]
             
         score = 0
+        matched_indices = set()
         for p in parts:
             p_tokens = get_tokens(p)
-            # Check if all tokens of this part are "matched" in the message
-            if all(is_token_match(pt, msg_tokens) for pt in p_tokens):
+            part_matched = True
+            part_indices = set()
+            for pt in p_tokens:
+                indices = get_matched_token_indices(pt, msg_tokens_list)
+                if indices:
+                    part_indices.update(indices)
+                else:
+                    part_matched = False
+                    break
+            if part_matched:
                 score += 1
+                matched_indices.update(part_indices)
         
         if score > 0:
-            match_obj = {"quota": q, "parts": parts, "score": score}
+            match_obj = {"quota": q, "parts": parts, "score": score, "indices": matched_indices}
             if is_pt: point_matches.append(match_obj)
             else: standard_matches.append(match_obj)
             
-    def get_best(matches):
+    def get_best_obj(matches):
         if not matches: return None
         matches.sort(key=lambda x: x["score"], reverse=True)
-        best_s = matches[0]["score"]
-        top = [m for m in matches if m["score"] == best_s]
-        # Prefer "perfect" matches (score == number of parts)
-        perfect = [m for m in top if len(m["parts"]) == best_s]
-        if perfect: return perfect[0]["quota"]
-        # Otherwise shortest path
+        top = [m for m in matches if m["score"] == matches[0]["score"]]
+        perfect = [m for m in top if len(m["parts"]) == m["score"]]
+        if perfect: return perfect[0]
         top.sort(key=lambda x: len(x["parts"]))
-        return top[0]["quota"]
+        return top[0]
 
-    results = []
-    std_best = get_best(standard_matches)
-    pt_best = get_best(point_matches)
+    std_obj = get_best_obj(standard_matches)
+    pt_obj = get_best_obj(point_matches)
     
-    # Check if this study requires Point Type selection
+    std_best = std_obj["quota"] if std_obj else None
+    pt_best = pt_obj["quota"] if pt_obj else None
+
     has_pt_quotas = any(q.category == "Tipo de Punto" for q in quotas)
-    
     if has_pt_quotas:
         if std_best and not pt_best:
-            return [], "⚠️ Has indicado la cuota demográfica, pero falta el punto (ej: parque, cc, iglesia, etc.)."
+            return [], "", "⚠️ Has indicado la cuota demográfica, pero falta el punto (ej: parque, cc, iglesia, etc.)."
         if pt_best and not std_best:
-            return [], "⚠️ Has indicado el punto, pero falta la cuota demográfica (ej: hombre 25)."
+            return [], "", "⚠️ Has indicado el punto, pero falta la cuota demográfica (ej: hombre 25)."
 
-    if std_best: results.append(std_best)
-    if pt_best: results.append(pt_best)
+    results = []
+    used_indices = set()
+    if std_best: 
+        results.append(std_best)
+        used_indices.update(std_obj["indices"])
+    if pt_best: 
+        results.append(pt_best)
+        used_indices.update(pt_obj["indices"])
+
+    # Identify leftovers
+    leftover_tokens = []
+    for idx, token in enumerate(msg_tokens_list):
+        if idx not in used_indices:
+            leftover_tokens.append(token)
+    
+    name_found = " ".join(leftover_tokens).strip() if leftover_tokens else "no tiene"
         
-    return results, ""
-
-
-def find_interviewer(db_users, name_token: str):
-    if not name_token: return None
-    try:
-        sql = text("SELECT full_name, username FROM users WHERE LOWER(full_name) LIKE :t OR LOWER(username) LIKE :t LIMIT 1")
-        res = db_users.execute(sql, {"t": f"%{name_token.lower()}%"}).first()
-        if res:
-            return name_token
-    except Exception:
-        # Fallback if full_name is missing
-        sql = text("SELECT username FROM users WHERE LOWER(username) LIKE :t LIMIT 1")
-        res = db_users.execute(sql, {"t": f"%{name_token.lower()}%"}).first()
-        if res:
-            return name_token
-    return None
+    return results, name_found, ""
 
 
 def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tuple[str, str, dict]:
