@@ -2155,14 +2155,15 @@ def find_interviewer(db_users, name_token: str):
         sql = text("SELECT full_name, username FROM users WHERE LOWER(full_name) LIKE :t OR LOWER(username) LIKE :t LIMIT 1")
         res = db_users.execute(sql, {"t": f"%{name_token.lower()}%"}).first()
         if res:
-            return res.full_name or res.username
+            return name_token
     except Exception:
         # Fallback if full_name is missing
         sql = text("SELECT username FROM users WHERE LOWER(username) LIKE :t LIMIT 1")
         res = db_users.execute(sql, {"t": f"%{name_token.lower()}%"}).first()
         if res:
-            return res.username
+            return name_token
     return None
+
 
 def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tuple[str, str, dict]:
 
