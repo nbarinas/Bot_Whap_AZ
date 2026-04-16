@@ -39,18 +39,34 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
 
     for fp in possible_fonts:
         if os.path.exists(fp):
-            font = ImageFont.truetype(fp, 13)
-            footer_font = ImageFont.truetype(fp, 11)
+            font = ImageFont.truetype(fp, 16)
+            footer_font = ImageFont.truetype(fp, 13)
             break
     for bp in possible_bolds:
         if os.path.exists(bp):
-            bold_font = ImageFont.truetype(bp, 13)
-            section_font = ImageFont.truetype(bp, 16)
-            title_font = ImageFont.truetype(bp, 20)
+            bold_font = ImageFont.truetype(bp, 16)
+            section_font = ImageFont.truetype(bp, 19)
+            title_font = ImageFont.truetype(bp, 24)
             break
     
     if not font: font = footer_font = ImageFont.load_default()
     if not bold_font: bold_font = section_font = title_font = ImageFont.load_default()
+
+    def wrap_text(text, max_chars=12):
+        if len(text) <= max_chars: return [text]
+        # Split by space or slash
+        import re
+        parts = re.split(r'([ /])', text)
+        lines = []
+        curr = ""
+        for p in parts:
+            if len(curr) + len(p) <= max_chars:
+                curr += p
+            else:
+                if curr: lines.append(curr.strip())
+                curr = p
+        if curr: lines.append(curr.strip())
+        return lines
 
     # Pre-calculate section layouts
     calculated_sections = []
@@ -63,9 +79,11 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
         sorted_rows = sec['sorted_rows']
         
         flat_cols = []
+        wrapped_headers = {} # (fn, ln) -> list of lines
         for fn in ordered_first_nodes:
             for ln in ordered_leaf_nodes[fn]:
                 flat_cols.append((fn, ln))
+                wrapped_headers[(fn, ln)] = wrap_text(ln, 11) # Max 11 chars for mobile density
         
         row_totals = {r: {'current': 0, 'target': 0, 'any_exceeded': False} for r in sorted_rows}
         col_totals = {(fn, ln): {'current': 0, 'target': 0, 'any_exceeded': False} for fn, ln in flat_cols}
@@ -88,17 +106,21 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
                     grand_total['target'] += targ
 
         # Column Widths
-        col0_w = max([get_text_size(r, bold_font)[0] for r in sorted_rows + ["Total"]] + [get_text_size("Categoría", bold_font)[0]]) + 2 * CELL_PADDING_H
+        col0_w = max([get_text_size(r, bold_font)[0] for r in sorted_rows + ["Total"]] + [get_text_size("Cat.", bold_font)[0]]) + 2 * CELL_PADDING_H
         col_widths = [col0_w]
         for fn, ln in flat_cols:
-            max_w = max(get_text_size(fn, bold_font)[0], get_text_size(ln, bold_font)[0])
+            lines = wrapped_headers[(fn, ln)]
+            max_header_w = max([get_text_size(line, bold_font)[0] for line in lines + [fn]])
+            
+            max_val_w = 0
             for r in sorted_rows:
                 if fn in data_map.get(r, {}) and ln in data_map[r][fn]:
                     d = data_map[r][fn][ln]
-                    max_w = max(max_w, get_text_size(f"{d['current']}/{d['target']}", font)[0])
+                    max_val_w = max(max_val_w, get_text_size(f"{d['current']}/{d['target']}", font)[0])
             ct = col_totals[(fn, ln)]
-            max_w = max(max_w, get_text_size(f"{ct['current']}/{ct['target']}", bold_font)[0])
-            col_widths.append(max_w + 2 * CELL_PADDING_H)
+            max_val_w = max(max_val_w, get_text_size(f"{ct['current']}/{ct['target']}", bold_font)[0])
+            
+            col_widths.append(max(max_header_w, max_val_w) + 2 * CELL_PADDING_H)
         
         total_col_w = max([get_text_size(f"{row_totals[r]['current']}/{row_totals[r]['target']}", bold_font)[0] for r in sorted_rows] + [get_text_size(f"{grand_total['current']}/{grand_total['target']}", bold_font)[0], get_text_size("Total", bold_font)[0]])
         col_widths.append(total_col_w + 2 * CELL_PADDING_H)
@@ -109,6 +131,7 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
         calculated_sections.append({
             'sec': sec,
             'flat_cols': flat_cols,
+            'wrapped_headers': wrapped_headers,
             'col_widths': col_widths,
             'row_totals': row_totals,
             'col_totals': col_totals,
@@ -168,9 +191,18 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
             lx = cx
             for ln in sec['ordered_leaf_nodes'][fn]:
                 ln_w = col_w[flat_idx + 1]
+                lines = cs['wrapped_headers'][(fn, ln)]
                 draw.rectangle([lx, curr_y + row_h, lx + ln_w, curr_y + 2*row_h], fill=HEADER_BG, outline=BORDER_COLOR)
-                tw, th = get_text_size(ln, bold_font)
-                draw.text((lx + (ln_w - tw)//2, curr_y + row_h + (row_h - th)//2), ln, fill=HEADER_TEXT, font=bold_font)
+                
+                # Draw lines centered vertically and horizontally
+                line_h = get_text_size("A", bold_font)[1]
+                total_text_h = len(lines) * line_h
+                ty = curr_y + row_h + (row_h - total_text_h)//2
+                for line in lines:
+                    lw, lh = get_text_size(line, bold_font)
+                    draw.text((lx + (ln_w - lw)//2, ty), line, fill=HEADER_TEXT, font=bold_font)
+                    ty += line_h
+                
                 lx += ln_w
                 flat_idx += 1
             cx += span_w
