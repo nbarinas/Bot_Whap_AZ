@@ -2132,12 +2132,22 @@ def check_free_text_quota(db, study_code: str, msg: str):
 
     results = []
     std_best = get_best(standard_matches)
-    if std_best: results.append(std_best)
-    
     pt_best = get_best(point_matches)
+    
+    # Check if this study requires Point Type selection
+    has_pt_quotas = any(q.category == "Tipo de Punto" for q in quotas)
+    
+    if has_pt_quotas:
+        if std_best and not pt_best:
+            return [], "⚠️ Has indicado la cuota demográfica, pero falta el punto (ej: parque, cc, iglesia, etc.)."
+        if pt_best and not std_best:
+            return [], "⚠️ Has indicado el punto, pero falta la cuota demográfica (ej: hombre 25)."
+
+    if std_best: results.append(std_best)
     if pt_best: results.append(pt_best)
         
     return results, ""
+
 
 def find_interviewer(db_users, name_token: str):
     if not name_token: return None
