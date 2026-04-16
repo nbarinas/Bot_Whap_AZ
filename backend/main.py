@@ -2033,11 +2033,11 @@ def build_study_report(db, study_code):
         
     return f"\n{matrix_msg}\n{stats_msg}"
 POINT_TYPE_ALIASES = {
-    "centro comercial": ["centro", "comercial", "cc"],
+    "centro comercial": ["centro", "cc"],
     "iglesia": ["iglesia", "iglecia"],
     "parque": ["parque"],
     "plaza/plazoleta": ["plaza", "plazoleta"],
-    "zona comercial": ["zona", "comercial"],
+    "zona comercial": ["zona"],
     "colegio/universidad": ["colegio", "universidad", "cole", "u", "uni"]
 }
 
