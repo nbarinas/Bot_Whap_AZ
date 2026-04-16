@@ -1145,25 +1145,38 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             
                 last_sub = db.query(models.QuotaSubmission).filter(
                     models.QuotaSubmission.phone_number == phone,
-                    models.QuotaSubmission.bot_quota_id.in_(q_ids)
+                    models.QuotaSubmission.bot_quota_id.in_(q_ids),
+                    models.QuotaSubmission.is_deleted == 0
                 ).order_by(models.QuotaSubmission.submitted_at.desc()).first()
             
                 if last_sub:
-                    if last_sub.is_deleted == 1:
-                        reply = "⚠️ Ya borraste tu última encuesta registrada. No puedes retroceder más."
-                    else:
-                        last_sub.is_deleted = 1
-                        quota = db.query(models.BotQuota).get(last_sub.bot_quota_id)
-                        quota.current_count -= 1
-                        db.commit()
+                    # Find all related submissions within a 2-second window
+                    batch_subs = db.query(models.QuotaSubmission).filter(
+                        models.QuotaSubmission.phone_number == phone,
+                        models.QuotaSubmission.bot_quota_id.in_(q_ids),
+                        models.QuotaSubmission.is_deleted == 0,
+                        models.QuotaSubmission.submitted_at >= last_sub.submitted_at - timedelta(seconds=2),
+                        models.QuotaSubmission.submitted_at <= last_sub.submitted_at + timedelta(seconds=2)
+                    ).all()
+
+                    deleted_labels = []
+                    for s in batch_subs:
+                        s.is_deleted = 1
+                        quota = db.query(models.Models.BotQuota).get(s.bot_quota_id) if hasattr(models, 'Models') else db.query(models.BotQuota).get(s.bot_quota_id)
+                        if quota:
+                            quota.current_count -= 1
+                            q_label = f"{quota.category} | {quota.value}" if quota.category != "General" else quota.value
+                            deleted_labels.append(f"{q_label}")
+                    
+                    db.commit()
+                    
+                    active_phones = get_daily_active_phones_for_study(db, study_code)
+                    if phone not in active_phones:
+                        active_phones.append(phone)
                         
-                        active_phones = get_daily_active_phones_for_study(db, study_code)
-                        if phone not in active_phones:
-                            active_phones.append(phone)
-                            
-                        q_label = f"{quota.category} | {quota.value}" if quota.category != "General" else quota.value
-                        send_quota_report_to_agents(db, study_code, active_phones, f"🗑️ Encuesta de *{q_label}* BORRADA por *{sender_label}*.\nFaltan {quota.target_count - quota.current_count} para esta cuota.")
-                        reply = "✅ Se ha borrado tu última encuesta registrada con éxito."
+                    labels_str = " y ".join(deleted_labels)
+                    send_quota_report_to_agents(db, study_code, active_phones, f"🗑️ Encuesta de *{labels_str}* BORRADA por *{sender_label}*.")
+                    reply = f"✅ Se ha borrado tu última acción ({len(batch_subs)} registros) con éxito."
                 else:
                     reply = "⚠️ No tienes encuestas registradas recientes en este estudio para borrar."
                 
