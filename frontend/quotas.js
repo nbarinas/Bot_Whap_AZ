@@ -34,7 +34,8 @@ const DEFAULT_CATEGORIES = {
     "Género": ["Hombre", "Mujer"],
     "Región": ["Norte", "Centro", "Sur"],
     "Edad": ["18-30", "31-45", "46+"],
-    "NSE": ["MT", "MB", "BA"]
+    "NSE": ["MT", "MB", "BA"],
+    "Tipo de Punto": ["Centro Comercial", "Iglesia", "Parque", "Plaza/Plazoleta", "Zona Comercial", "Colegio/Universidad"]
 };
 
 const PRIORITY_ORDER = ["Tipo de Punto", "Género", "Región", "Edad", "NSE"];
@@ -60,31 +61,41 @@ async function loadQuotas() {
             const isClosed = quotas.length > 0 && quotas[0].is_closed === 1;
             if (isClosed && !showClosed) continue;
             
-            const root = {};
+            const stdRoot = {};
+            const ptRoot = {};
 
             quotas.forEach(q => {
-                if (q.value && q.value.startsWith("Censos")) return; // Skip census from summation and display
-                const parts = q.category === "General" ? [] : q.category.split(" | ");
-                let current = root;
-
-                parts.forEach((p, idx) => {
-                    if (!current[p]) {
-                        current[p] = (idx === parts.length - 1) ? { __isLeaf: true, __quotas: [] } : {};
-                    }
-                    current = current[p];
-                });
-
-                if (parts.length === 0) {
-                    if (!current['Total']) current['Total'] = { __isLeaf: true, __quotas: [] };
-                    current['Total'].__quotas.push(q);
+                if (q.value && q.value.startsWith("Censos")) return;
+                
+                if (q.category === "Tipo de Punto") {
+                    // It's a point type quota
+                    if (!ptRoot["Tipo de Punto"]) ptRoot["Tipo de Punto"] = { __isLeaf: true, __quotas: [] };
+                    ptRoot["Tipo de Punto"].__quotas.push(q);
                 } else {
-                    current.__quotas.push(q);
+                    // Normal demographic quota
+                    const parts = q.category === "General" ? [] : q.category.split(" | ");
+                    let current = stdRoot;
+                    parts.forEach((p, idx) => {
+                        if (!current[p]) {
+                            current[p] = (idx === parts.length - 1) ? { __isLeaf: true, __quotas: [] } : {};
+                        }
+                        current = current[p];
+                    });
+                    if (parts.length === 0) {
+                        if (!current['Total']) current['Total'] = { __isLeaf: true, __quotas: [] };
+                        current['Total'].__quotas.push(q);
+                    } else {
+                        current.__quotas.push(q);
+                    }
                 }
             });
 
-            enrichWithTotals(root);
-            const studyType = (quotas.length > 0 && quotas[0].study_type) ? quotas[0].study_type : 'STANDARD';
-            const html = studyType === 'TDC' ? renderTdcGridHtml(quotas) : renderTreeHtml(root, true);
+            enrichWithTotals(stdRoot);
+            // We don't necessarily need enrichWithTotals for ptRoot if it's just one flat row, 
+            // but let's do it if there's more than one leaf? No, ptRoot is flat.
+            
+            const stdHtml = renderTreeHtml(stdRoot, true);
+            const ptHtml = Object.keys(ptRoot).length > 0 ? renderTreeHtml(ptRoot, true) : "";
 
             const statusBadge = isClosed ? '<span style="background:var(--text-muted); color:white; padding:2px 8px; border-radius:10px; margin-left:10px; font-size:0.8rem;"><i class="fas fa-archive"></i> Cerrado</span>' : '';
             const lockIcon = isClosed ? 'fa-lock-open' : 'fa-lock';
@@ -93,6 +104,7 @@ async function loadQuotas() {
 
             const studyWrapper = document.createElement('div');
             studyWrapper.className = 'htable-container';
+            studyWrapper.style.marginBottom = "2.5rem";
             studyWrapper.innerHTML = `
                 <div class="study-label" style="${isClosed ? 'background: #94a3b8;' : ''}">
                     <span>ESTUDIO: ${studyCode} ${statusBadge} <span style="font-size:0.8rem; background:rgba(255,255,255,0.2); color:white; padding:2px 8px; border-radius:10px; margin-left:10px;">${quotas.length} ítems</span></span>
@@ -105,7 +117,18 @@ async function loadQuotas() {
                         <button onclick="deleteStudyGlobal('${studyCode}')" style="background:var(--danger); color:white; border:none; padding:4px 10px; border-radius:6px; cursor:pointer;" title="Eliminar Estudio"><i class="fas fa-trash-alt"></i></button>
                     </div>
                 </div>
-                <div class="htable-root-groups" style="${isClosed ? 'opacity:0.6; pointer-events:none;' : ''}">${html}</div>
+                <div style="display: flex; flex-wrap: wrap; gap: 20px; padding: 15px; background: #fff; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; ${isClosed ? 'opacity:0.6; pointer-events:none;' : ''}">
+                    ${ptHtml ? `
+                    <div style="flex: 1 1 300px; min-width: 300px;">
+                        <h4 style="color:var(--primary); margin-bottom:0.8rem; font-size:1rem;"><i class="fas fa-map-marker-alt"></i> Cuota de Tipos de Puntos</h4>
+                        <div class="htable-root-groups" style="border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;">${ptHtml}</div>
+                    </div>` : ""}
+                    
+                    <div style="flex: 2 1 600px; min-width: 400px;">
+                        <h4 style="color:var(--primary); margin-bottom:0.8rem; font-size:1rem;"><i class="fas fa-users"></i> Cuota Cuadro Demográfico</h4>
+                        <div class="htable-root-groups" style="border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;">${stdHtml}</div>
+                    </div>
+                </div>
             `;
             container.appendChild(studyWrapper);
         }
@@ -256,16 +279,39 @@ function togglePointTypeInputs() {
     generateProposals();
 }
 
-function addPointTypeItem() {
-    const list = document.getElementById('pointTypeInputsList');
+function createPointTypeInput(val) {
+    const wrapper = document.createElement('div');
+    wrapper.style = 'position:relative; display:inline-block; margin-right:5px;';
+    
     const input = document.createElement('input');
     input.type = 'text';
     input.className = 'point-type-input-field';
-    input.placeholder = 'Punto X';
-    input.style = 'width:140px; padding:6px; border:1px solid #ccc; border-radius:5px; text-align:center; font-weight:600;';
+    input.value = val;
+    input.placeholder = val ? "" : "Punto X"; // Use placeholder if empty
+    input.style = 'width:145px; padding:8px; border:1px solid #cbd5e1; border-radius:10px; text-align:center; font-weight:700; color:var(--text-main); padding-right:28px; background:white;';
     input.oninput = generateProposals;
-    list.appendChild(input);
-    generateProposals();
+    
+    const deleteBtn = document.createElement('span');
+    deleteBtn.innerHTML = '&times;';
+    deleteBtn.title = 'Eliminar este punto';
+    deleteBtn.style = 'position:absolute; right:8px; top:50%; transform:translateY(-50%); cursor:pointer; color:#ef4444; font-size:1.4rem; font-weight:bold; line-height:1; transition: opacity 0.2s;';
+    deleteBtn.onmouseover = () => deleteBtn.style.opacity = '0.7';
+    deleteBtn.onmouseout = () => deleteBtn.style.opacity = '1';
+    deleteBtn.onclick = () => {
+        wrapper.remove();
+        generateProposals();
+    };
+    
+    wrapper.appendChild(input);
+    wrapper.appendChild(deleteBtn);
+    return wrapper;
+}
+
+function addPointTypeItem() {
+    const list = document.getElementById('pointTypeInputsList');
+    if (list) {
+        list.appendChild(createPointTypeInput(''));
+    }
 }
 
 function generateProposals() {
@@ -278,29 +324,73 @@ function generateProposals() {
 
     if (total <= 0) return;
 
-    if (checkboxes.length === 0) {
-        container.innerHTML = `
-        <div class="htable-container" style="border-width:1px; margin-bottom:0;">
-            <div class="htable-cols-container">
-                <div class="htable-cols-row header-row"><div>Total General</div></div>
-                <div class="htable-cols-row body-row">
-                    <div><input type="number" class="htable-input" value="${total}" data-cat="General" data-val="Total" min="1"></div>
+    let hasPointType = checkboxes.includes("Tipo de Punto");
+    if (hasPointType) {
+        const ptInputs = Array.from(document.querySelectorAll('.point-type-input-field')).map(i => i.value.trim()).filter(v => v !== "");
+        const pointTypesToUse = ptInputs; // Only use what is in the inputs
+        
+        if (pointTypesToUse.length === 0) {
+             container.innerHTML += `
+                <div style="margin-bottom: 2rem; border: 2px dashed #bae6fd; padding:1.5rem; border-radius:12px; text-align:center; color:#0369a1;">
+                    <i class="fas fa-info-circle"></i> No hay tipos de puntos definidos arriba.
+                </div>
+             `;
+        } else {
+        
+        const ptRoot = {};
+        ptRoot["Tipo de Punto"] = { __isLeaf: true, __quotas: [] };
+        
+        // Distribute total across point types for suggestion
+        const ptBaseTarget = Math.floor(total / pointTypesToUse.length);
+        let ptRemainder = total % pointTypesToUse.length;
+
+        pointTypesToUse.forEach(pt => {
+            let target = ptBaseTarget;
+            if (ptRemainder > 0) { target += 1; ptRemainder -= 1; }
+            ptRoot["Tipo de Punto"].__quotas.push({
+                val: pt,
+                target: target,
+                dbCat: "Tipo de Punto",
+                point: pt
+            });
+        });
+        
+        const ptHtml = renderTreeHtml(ptRoot, true, 0, true);
+        container.innerHTML += `
+            <div style="margin-bottom: 2rem;">
+                <h4 style="color:var(--primary); margin-bottom:0.5rem;"><i class="fas fa-map-marker-alt"></i> Cuota de Tipos de Puntos</h4>
+                <div class="htable-container" style="border-width:1px;"><div class="htable-root-groups">${ptHtml}</div></div>
+            </div>
+        `;
+        }
+    }
+
+    // 2. Standard Quotas
+    let standardCheckboxes = checkboxes.filter(c => c !== "Tipo de Punto");
+
+    if (standardCheckboxes.length === 0) {
+        container.innerHTML += `
+        <div style="margin-bottom: 1rem;">
+            <h4 style="color:var(--primary); margin-bottom:0.5rem;"><i class="fas fa-users"></i> Cuota Demográfica General</h4>
+            <div class="htable-container" style="border-width:1px;">
+                <div class="htable-cols-container">
+                    <div class="htable-cols-row header-row"><div>Total General</div></div>
+                    <div class="htable-cols-row body-row">
+                        <div><input type="number" class="htable-input" value="${total}" data-cat="General" data-val="Total" min="1"></div>
+                    </div>
                 </div>
             </div>
         </div>`;
         return;
     }
 
-    const minorCat = checkboxes[checkboxes.length - 1];
-    const majorCats = checkboxes.slice(0, checkboxes.length - 1);
+    const minorCat = standardCheckboxes[standardCheckboxes.length - 1];
+    const majorCats = standardCheckboxes.slice(0, standardCheckboxes.length - 1);
 
     let minorArrays = [];
     if (minorCat === "Edad") {
         const ageInputs = Array.from(document.querySelectorAll('.age-input-field')).map(i => i.value.trim()).filter(v => v !== "");
         minorArrays = ageInputs.length > 0 ? ageInputs : ["Total"];
-    } else if (minorCat === "Tipo de Punto") {
-        const ptInputs = Array.from(document.querySelectorAll('.point-type-input-field')).map(i => i.value.trim()).filter(v => v !== "");
-        minorArrays = ptInputs.length > 0 ? ptInputs : ["General"];
     } else {
         minorArrays = DEFAULT_CATEGORIES[minorCat];
         if (!minorArrays || minorArrays.length === 0) minorArrays = ["Total"];
@@ -312,10 +402,6 @@ function generateProposals() {
             if (cat === "Edad") {
                 const ageInputs = Array.from(document.querySelectorAll('.age-input-field')).map(i => i.value.trim()).filter(v => v !== "");
                 return ageInputs.length > 0 ? ageInputs : ["Total"];
-            }
-            if (cat === "Tipo de Punto") {
-                const ptInputs = Array.from(document.querySelectorAll('.point-type-input-field')).map(i => i.value.trim()).filter(v => v !== "");
-                return ptInputs.length > 0 ? ptInputs : ["General"];
             }
             return DEFAULT_CATEGORIES[cat] || ["Total"];
         });
@@ -352,25 +438,22 @@ function generateProposals() {
             let target = baseTarget;
             if (remainder > 0) { target += 1; remainder -= 1; }
 
-            // Track point name for DB column if it's one of the parts
-            let rowPoint = "General";
-            if (minorCat === "Tipo de Punto") rowPoint = minorVal;
-            else if (majorCats.includes("Tipo de Punto")) {
-                const ptIdx = majorCats.indexOf("Tipo de Punto");
-                rowPoint = majorComboArray[ptIdx];
-            }
-
             current.__quotas.push({
                 val: minorVal,
                 target: target,
                 dbCat: dbCategory,
-                point: rowPoint
+                point: "General"
             });
         });
     });
 
     const html = renderTreeHtml(root, true, 0, true);
-    container.innerHTML = `<div class="htable-container" style="border-width:1px; margin-bottom:0;"><div class="htable-root-groups">${html}</div></div>`;
+    container.innerHTML += `
+        <div>
+            <h4 style="color:var(--primary); margin-bottom:0.5rem;"><i class="fas fa-users"></i> Cuota Cuadro Demográfico</h4>
+            <div class="htable-container" style="border-width:1px; margin-bottom:0;"><div class="htable-root-groups">${html}</div></div>
+        </div>
+    `;
 }
 
 function openModal() {
@@ -384,12 +467,40 @@ function openModal() {
     const ptContainer = document.getElementById('dynamicPointTypeContainer');
     if (ptContainer) {
         ptContainer.style.display = 'none';
-        document.getElementById('pointTypeInputsList').innerHTML = `
-            <input type="text" class="point-type-input-field" value="General" style="width:140px; padding:6px; border:1px solid #ccc; border-radius:5px; text-align:center; font-weight:600;" oninput="generateProposals()">
-        `;
+        const list = document.getElementById('pointTypeInputsList');
+        if (list) {
+            list.innerHTML = `
+                <div style="position:relative; display:inline-block; margin-right:5px;">
+                    <input type="text" class="point-type-input-field" value="Centro Comercial" style="width:145px; padding:8px; border:1px solid #cbd5e1; border-radius:10px; text-align:center; font-weight:700; color:#1e293b; padding-right:28px; background:white;" oninput="generateProposals()">
+                    <span title="Eliminar este punto" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); cursor:pointer; color:#ef4444; font-size:1.4rem; font-weight:bold; line-height:1;" onclick="this.parentElement.remove(); generateProposals();">&times;</span>
+                </div>
+                <div style="position:relative; display:inline-block; margin-right:5px;">
+                    <input type="text" class="point-type-input-field" value="Iglesia" style="width:145px; padding:8px; border:1px solid #cbd5e1; border-radius:10px; text-align:center; font-weight:700; color:#1e293b; padding-right:28px; background:white;" oninput="generateProposals()">
+                    <span title="Eliminar este punto" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); cursor:pointer; color:#ef4444; font-size:1.4rem; font-weight:bold; line-height:1;" onclick="this.parentElement.remove(); generateProposals();">&times;</span>
+                </div>
+                <div style="position:relative; display:inline-block; margin-right:5px;">
+                    <input type="text" class="point-type-input-field" value="Parque" style="width:145px; padding:8px; border:1px solid #cbd5e1; border-radius:10px; text-align:center; font-weight:700; color:#1e293b; padding-right:28px; background:white;" oninput="generateProposals()">
+                    <span title="Eliminar este punto" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); cursor:pointer; color:#ef4444; font-size:1.4rem; font-weight:bold; line-height:1;" onclick="this.parentElement.remove(); generateProposals();">&times;</span>
+                </div>
+                <div style="position:relative; display:inline-block; margin-right:5px;">
+                    <input type="text" class="point-type-input-field" value="Plaza/Plazoleta" style="width:145px; padding:8px; border:1px solid #cbd5e1; border-radius:10px; text-align:center; font-weight:700; color:#1e293b; padding-right:28px; background:white;" oninput="generateProposals()">
+                    <span title="Eliminar este punto" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); cursor:pointer; color:#ef4444; font-size:1.4rem; font-weight:bold; line-height:1;" onclick="this.parentElement.remove(); generateProposals();">&times;</span>
+                </div>
+                <div style="position:relative; display:inline-block; margin-right:5px;">
+                    <input type="text" class="point-type-input-field" value="Zona Comercial" style="width:145px; padding:8px; border:1px solid #cbd5e1; border-radius:10px; text-align:center; font-weight:700; color:#1e293b; padding-right:28px; background:white;" oninput="generateProposals()">
+                    <span title="Eliminar este punto" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); cursor:pointer; color:#ef4444; font-size:1.4rem; font-weight:bold; line-height:1;" onclick="this.parentElement.remove(); generateProposals();">&times;</span>
+                </div>
+                <div style="position:relative; display:inline-block; margin-right:5px;">
+                    <input type="text" class="point-type-input-field" value="Colegio/Universidad" style="width:145px; padding:8px; border:1px solid #cbd5e1; border-radius:10px; text-align:center; font-weight:700; color:#1e293b; padding-right:28px; background:white;" oninput="generateProposals()">
+                    <span title="Eliminar este punto" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); cursor:pointer; color:#ef4444; font-size:1.4rem; font-weight:bold; line-height:1;" onclick="this.parentElement.remove(); generateProposals();">&times;</span>
+                </div>
+            `;
+        }
     }
 
     document.getElementById('proposalsContainer').innerHTML = '';
+    // Trigger a refresh of the grids
+    generateProposals();
 }
 
 function closeModal() { document.getElementById('quotaModal').style.display = 'none'; }

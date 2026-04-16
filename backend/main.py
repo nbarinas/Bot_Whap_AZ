@@ -1195,12 +1195,19 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             else:
                 # Try free-text fast match
                 study_code = ctx.get("study_code")
-                matched_quota, err_msg = check_free_text_quota(db, study_code, msg)
-                if matched_quota:
-                    q_name = matched_quota.category + " | " + matched_quota.value if matched_quota.category != "General" else matched_quota.value
-                    reply = f"¿Quieres agregar 1 encuesta a la cuota:\n*{q_name}*?"
+                matched_quotas, err_msg = check_free_text_quota(db, study_code, msg)
+                if matched_quotas:
+                    q_names = []
+                    q_ids = []
+                    for q in matched_quotas:
+                        q_name = q.category + " | " + q.value if (q.category and q.category != "General") else q.value
+                        q_names.append(q_name)
+                        q_ids.append(q.id)
+                    
+                    names_str = "\n• ".join(q_names)
+                    reply = f"¿Quieres agregar 1 encuesta a:\n• {names_str}?"
                     session.state = "WAITING_FREE_TEXT_CONFIRM"
-                    ctx["free_text_quota_id"] = matched_quota.id
+                    ctx["free_text_quota_ids"] = q_ids
                     interactive_data = {
                         "type": "button",
                         "body": {"text": reply},
@@ -1239,12 +1246,19 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     reply, interactive_data, ctx = handle_invalid("Opción inválida.", opts_text, ctx.get("interactive_fallback"))
             except ValueError:
                 study_code = ctx.get("study_code")
-                matched_quota, err_msg = check_free_text_quota(db, study_code, msg)
-                if matched_quota:
-                    q_name = matched_quota.category + " | " + matched_quota.value if matched_quota.category != "General" else matched_quota.value
-                    reply = f"¿Quieres agregar 1 encuesta a la cuota:\n*{q_name}*?"
+                matched_quotas, err_msg = check_free_text_quota(db, study_code, msg)
+                if matched_quotas:
+                    q_names = []
+                    q_ids = []
+                    for q in matched_quotas:
+                        q_name = q.category + " | " + q.value if (q.category and q.category != "General") else q.value
+                        q_names.append(q_name)
+                        q_ids.append(q.id)
+                    
+                    names_str = "\n• ".join(q_names)
+                    reply = f"¿Quieres agregar 1 encuesta a:\n• {names_str}?"
                     session.state = "WAITING_FREE_TEXT_CONFIRM"
-                    ctx["free_text_quota_id"] = matched_quota.id
+                    ctx["free_text_quota_ids"] = q_ids
                     interactive_data = {
                         "type": "button",
                         "body": {"text": reply},
@@ -1264,31 +1278,34 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
 
         elif state == "WAITING_FREE_TEXT_CONFIRM":
             if msg in ["1", "si", "sí", "sí, agregar"]:
-                quota_id = ctx.get("free_text_quota_id")
-                quota = db.query(models.BotQuota).get(quota_id)
-                if quota:
-                    q_label = f"{quota.category} | {quota.value}" if quota.category != "General" else quota.value
-                    
+                quota_ids = ctx.get("free_text_quota_ids", [])
+                if not quota_ids and ctx.get("free_text_quota_id"):
+                    quota_ids = [ctx.get("free_text_quota_id")]
+                
+                if quota_ids:
                     # Interceptor: See if the message has an interviewer name
-                    # Message tokens might be "mb hombre jinny". matched_quota used some tokens.
-                    # We'll take tokens NOT used by the quota logic or just the last token.
                     msg_tokens = re.findall(r'[a-z0-9\-]+', message_raw.lower())
                     interviewer = None
                     if len(msg_tokens) > 0:
                         last_token = msg_tokens[-1]
-                        # Verify if this token matches an interviewer
                         interviewer = find_interviewer(db_users, last_token)
 
-                    sub = models.QuotaSubmission(
-                        bot_quota_id=quota.id,
-                        phone_number=phone,
-                        is_deleted=0,
-                        interviewer_name=interviewer
-                    )
-                    db.add(sub)
-                    quota.current_count += 1
                     study_code = ctx.get("study_code")
-                    
+                    labels = []
+                    for q_id in quota_ids:
+                        quota = db.query(models.BotQuota).get(q_id)
+                        if quota:
+                            sub = models.QuotaSubmission(
+                                bot_quota_id=quota.id,
+                                phone_number=phone,
+                                is_deleted=0,
+                                interviewer_name=interviewer
+                            )
+                            db.add(sub)
+                            quota.current_count += 1
+                            q_label = f"{quota.category} | {quota.value}" if (quota.category and quota.category != "General") else quota.value
+                            labels.append(f"{q_label} ({quota.target_count - quota.current_count} faltantes)")
+
                     # Ensure they are subscribed to this study now (latest interaction)
                     set_exclusive_study_subscription(db, phone, study_code)
                     
@@ -1296,12 +1313,12 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     if phone not in active_phones:
                         active_phones.append(phone)
                         
-                    q_label = f"{quota.category} | {quota.value}" if quota.category != "General" else quota.value
-                    send_quota_report_to_agents(db, study_code, active_phones, f"📈 ¡Nueva encuesta de *{q_label}* guardada por *{sender_label}*!\nFaltan {quota.target_count - quota.current_count} para esta cuota.")
+                    summary_str = "\n• ".join(labels)
+                    send_quota_report_to_agents(db, study_code, active_phones, f"📈 ¡Nueva encuesta guardada por *{sender_label}* en:\n• {summary_str}")
                     
-                    reply = f"✅ ¡Guardado! Faltan {quota.target_count - quota.current_count} encuestas de esta cuota."
+                    reply = f"✅ ¡Guardado con éxito en {len(labels)} cuotas!"
                 else:
-                    reply = "⚠️ Error: No se encontró la cuota en la base de datos."
+                    reply = "⚠️ Error: No se encontraron las cuotas en la base de datos."
                 session.state = "IDLE"
                 ctx = {}
             elif msg in ["2", "no", "no, cancelar", "cancelar"]:
@@ -1763,44 +1780,55 @@ def send_quota_report_to_agents(db, study_code, phones, caption=""):
             print(f"DEBUG: No quotas found for study {study_code}")
             return
             
-        col_tree = {} # { first_node: set(leaf_node) }
-        row_keys = set()
-        data_map = {} # { middle_str: { first_node: { leaf_node: {...} } } }
-
-        for q in all_study_quotas:
-            parts = q.category.split(' | ') if '|' in q.category else [q.category]
-            parts.append(q.value)
-            path_tuple = tuple(p.strip() for p in parts if p.strip())
-            if not path_tuple: continue
+        def build_sec_data(quotas):
+            col_tree = {}
+            row_keys = set()
+            data_map = {}
+            for q in quotas:
+                parts = q.category.split(' | ') if '|' in q.category else [q.category]
+                parts.append(q.value)
+                path_tuple = tuple(p.strip() for p in parts if p.strip())
+                if not path_tuple: continue
+                
+                first_node = path_tuple[0]
+                if len(path_tuple) > 2:
+                    middle_str = " | ".join(path_tuple[1:-1])
+                    leaf_node = path_tuple[-1]
+                elif len(path_tuple) == 2:
+                    middle_str = "-"
+                    leaf_node = path_tuple[-1]
+                else:
+                    middle_str = "-"
+                    leaf_node = path_tuple[0]
+                
+                if first_node not in col_tree: col_tree[first_node] = set()
+                col_tree[first_node].add(leaf_node)
+                row_keys.add(middle_str)
+                if middle_str not in data_map: data_map[middle_str] = {}
+                if first_node not in data_map[middle_str]: data_map[middle_str][first_node] = {}
+                data_map[middle_str][first_node][leaf_node] = {'current': q.current_count, 'target': q.target_count}
             
-            first_node = path_tuple[0]
-            if len(path_tuple) > 2:
-                middle_str = " | ".join(path_tuple[1:-1])
-                leaf_node = path_tuple[-1]
-            elif len(path_tuple) == 2:
-                middle_str = "-"
-                leaf_node = path_tuple[-1]
-            else:
-                middle_str = "-"
-                leaf_node = path_tuple[0]
-            
-            if first_node not in col_tree: col_tree[first_node] = set()
-            col_tree[first_node].add(leaf_node)
-            row_keys.add(middle_str)
-            if middle_str not in data_map: data_map[middle_str] = {}
-            if first_node not in data_map[middle_str]: data_map[middle_str][first_node] = {}
-            data_map[middle_str][first_node][leaf_node] = {'current': q.current_count, 'target': q.target_count}
+            ordered_fns = sorted(list(col_tree.keys()))
+            ordered_lns = {fn: sorted(list(col_tree[fn])) for fn in ordered_fns}
+            return data_map, ordered_fns, ordered_lns, sorted(list(row_keys))
 
-        ordered_first_nodes = sorted(list(col_tree.keys()))
-        ordered_leaf_nodes = {fn: sorted(list(col_tree[fn])) for fn in ordered_first_nodes}
-        sorted_rows = sorted(list(row_keys))
+        sections = []
+        # Group 1: Demographic (Standard)
+        std_quotas = [q for q in all_study_quotas if q.category != "Tipo de Punto"]
+        if std_quotas:
+            dm, ofn, oln, sr = build_sec_data(std_quotas)
+            sections.append({ 'title': 'Cuota Demográfica', 'data_map': dm, 'ordered_first_nodes': ofn, 'ordered_leaf_nodes': oln, 'sorted_rows': sr })
+        
+        # Group 2: Point Types
+        pt_quotas = [q for q in all_study_quotas if q.category == "Tipo de Punto"]
+        if pt_quotas:
+            dm, ofn, oln, sr = build_sec_data(pt_quotas)
+            sections.append({ 'title': 'Cuota Tipos de Puntos', 'data_map': dm, 'ordered_first_nodes': ofn, 'ordered_leaf_nodes': oln, 'sorted_rows': sr })
 
         # 2. Render Image
         img_filename = f"broadcast_{study_code}.png"
         img_path = os.path.join(BASE_DIR, img_filename)
-        render_utils.generate_quota_table_image(
-            data_map, ordered_first_nodes, ordered_leaf_nodes, sorted_rows, study_code, img_path
-        )
+        render_utils.generate_multi_table_report(sections, study_code, img_path)
         
         # 3. Upload to Meta
         print(f"DEBUG: Uploading broadcast image for {study_code}...")
@@ -2004,6 +2032,15 @@ def build_study_report(db, study_code):
         stats_msg += f"Total hoy: {total_today}"
         
     return f"\n{matrix_msg}\n{stats_msg}"
+POINT_TYPE_ALIASES = {
+    "centro comercial": ["centro", "comercial", "cc"],
+    "iglesia": ["iglesia", "iglecia"],
+    "parque": ["parque"],
+    "plaza/plazoleta": ["plaza", "plazoleta"],
+    "zona comercial": ["zona", "comercial"],
+    "colegio/universidad": ["colegio", "universidad", "cole", "u", "uni"]
+}
+
 def check_free_text_quota(db, study_code: str, msg: str):
     import re
     
@@ -2015,6 +2052,16 @@ def check_free_text_quota(db, study_code: str, msg: str):
     def is_token_match(quota_token, message_tokens):
         if quota_token in message_tokens:
             return True
+        
+        # Point Type Alias Check
+        for canonical, aliases in POINT_TYPE_ALIASES.items():
+            canonical_tokens = get_tokens(canonical)
+            if quota_token in canonical_tokens:
+                # If the quota token is part of a canonical name (e.g. "centro"),
+                # check if any of its aliases are in the message (e.g. "cc")
+                if any(al in message_tokens for al in aliases):
+                    return True
+
         # Range logic: if quota is "10-14" and message has "12"
         range_match = re.match(r'^(\d+)-(\d+)$', quota_token)
         if range_match:
@@ -2029,57 +2076,54 @@ def check_free_text_quota(db, study_code: str, msg: str):
 
     msg_tokens = set(get_tokens(msg))
     if not msg_tokens:
-        return None, ""
+        return [], ""
 
     quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
     
-    best_score = 0
-    matched_quotas = []
+    # We want to find the best match for Standard categories AND the best match for "Tipo de Punto"
+    standard_matches = []
+    point_matches = []
     
     for q in quotas:
-        if q.category == "General":
-            parts = [q.value.lower().strip()]
+        is_pt = (q.category == "Tipo de Punto")
+        if q.category == "General" and not q.value.startswith("Censos"):
+             parts = [q.value.lower().strip()]
         else:
-            parts = [x.strip().lower() for x in q.category.split("|")] + [q.value.lower().strip()]
+             cat_part = q.category if q.category else ""
+             parts = [x.strip().lower() for x in cat_part.split("|") if x.strip()] + [q.value.lower().strip()]
             
         score = 0
-        quota_parts_tokens = []
         for p in parts:
             p_tokens = get_tokens(p)
-            quota_parts_tokens.append(p_tokens)
             # Check if all tokens of this part are "matched" in the message
             if all(is_token_match(pt, msg_tokens) for pt in p_tokens):
                 score += 1
         
         if score > 0:
-            if score > best_score:
-                best_score = score
-                matched_quotas = [(q, parts)]
-            elif score == best_score:
-                matched_quotas.append((q, parts))
+            match_obj = {"quota": q, "parts": parts, "score": score}
+            if is_pt: point_matches.append(match_obj)
+            else: standard_matches.append(match_obj)
             
-    if not matched_quotas:
-        return None, ""
-        
-    if len(matched_quotas) == 1:
-        return matched_quotas[0][0], ""
-        
-    elif len(matched_quotas) > 1:
-        # If there are ties, prefer the one where the score matches the total number of parts (Perfect match)
-        perfect_matches = [q for q, p in matched_quotas if len(p) == best_score]
-        if len(perfect_matches) == 1:
-            return perfect_matches[0], ""
-        
-        # If still more than one, check if one has fewer TOTAL parts but same score
-        # e.g. msg="18-30", parts1=["Edad", "18-30"] score=1, parts2=["18-30"] score=1
-        # The shorter one is more specific to the input.
-        matched_quotas.sort(key=lambda x: len(x[1]))
-        if len(matched_quotas[0][1]) < len(matched_quotas[1][1]):
-            return matched_quotas[0][0], ""
+    def get_best(matches):
+        if not matches: return None
+        matches.sort(key=lambda x: x["score"], reverse=True)
+        best_s = matches[0]["score"]
+        top = [m for m in matches if m["score"] == best_s]
+        # Prefer "perfect" matches (score == number of parts)
+        perfect = [m for m in top if len(m["parts"]) == best_s]
+        if perfect: return perfect[0]["quota"]
+        # Otherwise shortest path
+        top.sort(key=lambda x: len(x["parts"]))
+        return top[0]["quota"]
 
-        return None, "Hay varias cuotas que coinciden con tu texto. Por favor, sé más específico (ej: añade el sexo o rango de edad exacto) o usa los botones."
+    results = []
+    std_best = get_best(standard_matches)
+    if std_best: results.append(std_best)
+    
+    pt_best = get_best(point_matches)
+    if pt_best: results.append(pt_best)
         
-    return None, ""
+    return results, ""
 
 def find_interviewer(db_users, name_token: str):
     if not name_token: return None
