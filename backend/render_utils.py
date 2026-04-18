@@ -26,8 +26,8 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
     CELL_BG_ALT = (248, 249, 252) 
     HIGHLIGHT_BG = (255, 230, 100) # Yellow for filled
     HIGHLIGHT_TEXT = (100, 80, 0)   
-    EXCEEDED_BG = (255, 204, 204)  # Red for exceeded
-    EXCEEDED_TEXT = (180, 0, 0)    
+    EXCEEDED_BG = (255, 100, 100)  # Stronger Red for exceeded
+    EXCEEDED_TEXT = (255, 255, 255) # White text on strong red
     BORDER_COLOR = (218, 220, 224)
     TEXT_COLOR = (60, 64, 67)
     PRIMARY_LABEL_COLOR = (32, 33, 36)
@@ -335,7 +335,7 @@ def generate_quota_table_image(data_map, ordered_first_nodes, ordered_leaf_nodes
         'ordered_leaf_nodes': ordered_leaf_nodes,
         'sorted_rows': sorted_rows,
         'display_mode': 'target',
-        'header_bg': (70, 130, 180) # Steel Blue
+        'header_bg': (0, 82, 162) # Deep Strong Blue
     }
     sec2 = {
         'title': 'Cuota Realizada',
@@ -344,6 +344,32 @@ def generate_quota_table_image(data_map, ordered_first_nodes, ordered_leaf_nodes
         'ordered_leaf_nodes': ordered_leaf_nodes,
         'sorted_rows': sorted_rows,
         'display_mode': 'current',
-        'header_bg': (230, 126, 34) # Carrot Orange
+        'header_bg': (22, 163, 74) # Strong Forest Green
     }
     return generate_multi_table_report([sec1, sec2], study_code, output_path)
+
+def get_pilot_sections(standard_sections):
+    """
+    Transforms a list of standard sections (1/10 format) 
+    into a split-table format (Blue/Green headers).
+    """
+    pilot_sections = []
+    for sec in standard_sections:
+        # Part 1: Goal (Target only)
+        # We append a descriptive suffix to the title
+        tit = sec.get('title', 'Cuota')
+        
+        sec_target = sec.copy()
+        sec_target['title'] = f"{tit} - A REALIZAR"
+        sec_target['display_mode'] = 'target'
+        sec_target['header_bg'] = (0, 82, 162)
+        pilot_sections.append(sec_target)
+        
+        # Part 2: Accomplished (Current only)
+        sec_current = sec.copy()
+        sec_current['title'] = f"{tit} - REALIZADA"
+        sec_current['display_mode'] = 'current'
+        sec_current['header_bg'] = (22, 163, 74)
+        pilot_sections.append(sec_current)
+        
+    return pilot_sections
