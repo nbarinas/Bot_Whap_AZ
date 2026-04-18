@@ -95,14 +95,7 @@ async def call_reminder_task():
                             send_whatsapp_message(agent_phone, msg)
                             print(f"Recordatorio de llamada enviado a {agent_phone} para llamada id {call_id}.")
                             
-                            # ---- TEMPORARY ADMIN ALERTS (To be reverted after 2 PM) ----
-                            alert_msg = f"Se acaba de enviar un mensaje a {agent_phone} avisando que:\n\"{msg}\""
-                            try:
-                                send_whatsapp_message("573136623816", alert_msg)
-                                send_whatsapp_message("573234968972", alert_msg)
-                            except Exception as alert_e:
-                                print(f"Error enviando alertas temporales: {alert_e}")
-                            # -------------------------------------------------------------
+
                             
                             # Update the calls table
                             update_sql = text("UPDATE calls SET reminder_sent = 1 WHERE id = :call_id")
@@ -1781,7 +1774,7 @@ def send_quota_report_to_agents(db, study_code, phones, caption=""):
         from . import models, render_utils, upload_media
         
         # 0. Pilot Configuration
-        PILOT_PHONES = ["3001846907", "573001846907", "3136623816", "573136623816"]
+        PILOT_PHONES = ["3001846907", "573001846907"]
         
         # 1. Get components for the image
         all_study_quotas = db.query(models.BotQuota).filter(
