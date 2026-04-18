@@ -1781,7 +1781,7 @@ def send_quota_report_to_agents(db, study_code, phones, caption=""):
         from . import models, render_utils, upload_media
         
         # 0. Pilot Configuration
-        PILOT_PHONES = ["3001846907", "573001846907"]
+        PILOT_PHONES = ["3001846907", "573001846907", "3136623816", "573136623816"]
         
         # 1. Get components for the image
         all_study_quotas = db.query(models.BotQuota).filter(
