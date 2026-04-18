@@ -77,13 +77,14 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
         ordered_first_nodes = sec['ordered_first_nodes']
         ordered_leaf_nodes = sec['ordered_leaf_nodes']
         sorted_rows = sec['sorted_rows']
+        display_mode = sec.get('display_mode', 'both') # 'both', 'target', or 'current'
         
         flat_cols = []
-        wrapped_headers = {} # (fn, ln) -> list of lines
+        wrapped_headers = {} 
         for fn in ordered_first_nodes:
             for ln in ordered_leaf_nodes[fn]:
                 flat_cols.append((fn, ln))
-                wrapped_headers[(fn, ln)] = wrap_text(ln, 11) # Max 11 chars for mobile density
+                wrapped_headers[(fn, ln)] = wrap_text(ln, 11)
         
         row_totals = {r: {'current': 0, 'target': 0, 'any_exceeded': False} for r in sorted_rows}
         col_totals = {(fn, ln): {'current': 0, 'target': 0, 'any_exceeded': False} for fn, ln in flat_cols}
@@ -116,14 +117,23 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
             for r in sorted_rows:
                 if fn in data_map.get(r, {}) and ln in data_map[r][fn]:
                     d = data_map[r][fn][ln]
-                    max_val_w = max(max_val_w, get_text_size(f"{d['current']}/{d['target']}", font)[0])
+                    val = str(d['target'] if display_mode == 'target' else (d['current'] if display_mode == 'current' else f"{d['current']}/{d['target']}"))
+                    max_val_w = max(max_val_w, get_text_size(val, font)[0])
             ct = col_totals[(fn, ln)]
-            max_val_w = max(max_val_w, get_text_size(f"{ct['current']}/{ct['target']}", bold_font)[0])
+            ct_val = str(ct['target'] if display_mode == 'target' else (ct['current'] if display_mode == 'current' else f"{ct['current']}/{ct['target']}"))
+            max_val_w = max(max_val_w, get_text_size(ct_val, bold_font)[0])
             
             col_widths.append(max(max_header_w, max_val_w) + 2 * CELL_PADDING_H)
         
-        total_col_w = max([get_text_size(f"{row_totals[r]['current']}/{row_totals[r]['target']}", bold_font)[0] for r in sorted_rows] + [get_text_size(f"{grand_total['current']}/{grand_total['target']}", bold_font)[0], get_text_size("Total", bold_font)[0]])
-        col_widths.append(total_col_w + 2 * CELL_PADDING_H)
+        # Total Column width
+        all_row_tot_vals = []
+        for r in sorted_rows:
+            rt = row_totals[r]
+            all_row_tot_vals.append(str(rt['target'] if display_mode == 'target' else (rt['current'] if display_mode == 'current' else f"{rt['current']}/{rt['target']}")))
+        gt_val = str(grand_total['target'] if display_mode == 'target' else (grand_total['current'] if display_mode == 'current' else f"{grand_total['current']}/{grand_total['target']}"))
+        
+        max_total_w = max([get_text_size(v, bold_font)[0] for v in all_row_tot_vals + [gt_val, "Total"]])
+        col_widths.append(max_total_w + 2 * CELL_PADDING_H)
         
         table_w = sum(col_widths)
         max_img_w = max(max_img_w, table_w + 2 * PADDING)
@@ -136,7 +146,9 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
             'row_totals': row_totals,
             'col_totals': col_totals,
             'grand_total': grand_total,
-            'table_w': table_w
+            'table_w': table_w,
+            'display_mode': display_mode,
+            'header_bg': sec.get('header_bg', HEADER_BG)
         })
 
     # Total Image Elevation
@@ -164,7 +176,10 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
     # 2. Sections
     for cs in calculated_sections:
         sec = cs['sec']
-        draw.text((PADDING, curr_y), sec['title'].upper(), fill=HEADER_BG, font=section_font)
+        h_bg = cs['header_bg']
+        display_mode = cs['display_mode']
+        
+        draw.text((PADDING, curr_y), sec['title'].upper(), fill=h_bg, font=section_font)
         curr_y += 30
         
         start_x = PADDING
@@ -175,7 +190,7 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
         
         # Header Row 1 (Groups)
         cx = start_x
-        draw.rectangle([cx, curr_y, cx + col_w[0], curr_y + 2*row_h], fill=HEADER_BG, outline=BORDER_COLOR)
+        draw.rectangle([cx, curr_y, cx + col_w[0], curr_y + 2*row_h], fill=h_bg, outline=BORDER_COLOR)
         cat_w, cat_h = get_text_size("Cat.", bold_font)
         draw.text((cx + (col_w[0] - cat_w)//2, curr_y + (2*row_h - cat_h)//2), "Cat.", fill=HEADER_TEXT, font=bold_font)
         cx += col_w[0]
@@ -184,7 +199,7 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
         for fn in sec['ordered_first_nodes']:
             num_spanned = len(sec['ordered_leaf_nodes'][fn])
             span_w = sum(col_w[flat_idx + 1 : flat_idx + 1 + num_spanned])
-            draw.rectangle([cx, curr_y, cx + span_w, curr_y + row_h], fill=HEADER_BG, outline=BORDER_COLOR)
+            draw.rectangle([cx, curr_y, cx + span_w, curr_y + row_h], fill=h_bg, outline=BORDER_COLOR)
             tw, th = get_text_size(fn, bold_font)
             draw.text((cx + (span_w - tw)//2, curr_y + (row_h - th)//2), fn, fill=HEADER_TEXT, font=bold_font)
             
@@ -192,7 +207,7 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
             for ln in sec['ordered_leaf_nodes'][fn]:
                 ln_w = col_w[flat_idx + 1]
                 lines = cs['wrapped_headers'][(fn, ln)]
-                draw.rectangle([lx, curr_y + row_h, lx + ln_w, curr_y + 2*row_h], fill=HEADER_BG, outline=BORDER_COLOR)
+                draw.rectangle([lx, curr_y + row_h, lx + ln_w, curr_y + 2*row_h], fill=h_bg, outline=BORDER_COLOR)
                 
                 # Draw lines centered vertically and horizontally
                 line_h = get_text_size("A", bold_font)[1]
@@ -208,7 +223,7 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
             cx += span_w
         
         # Total Column Header
-        draw.rectangle([cx, curr_y, cx + col_w[-1], curr_y + 2*row_h], fill=HEADER_BG, outline=BORDER_COLOR)
+        draw.rectangle([cx, curr_y, cx + col_w[-1], curr_y + 2*row_h], fill=h_bg, outline=BORDER_COLOR)
         tw, th = get_text_size("Total", bold_font)
         draw.text((cx + (col_w[-1] - tw)//2, curr_y + (2*row_h - th)//2), "Total", fill=HEADER_TEXT, font=bold_font)
         
@@ -229,10 +244,19 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
                 is_hl, is_ex = False, False
                 if fn in data_map.get(r_label, {}) and ln in data_map[r_label][fn]:
                     d = data_map[r_label][fn][ln]
-                    val_str = f"{d['current']}/{d['target']}"
+                    # Format value based on mode
+                    if display_mode == 'target': val_str = str(d['target'])
+                    elif display_mode == 'current': val_str = str(d['current'])
+                    else: val_str = f"{d['current']}/{d['target']}"
+                    
+                    # Highlighting (Always compare current vs target regardless of what is displayed)
                     if d['current'] > d['target']: is_ex, cell_bg = True, EXCEEDED_BG
                     elif d['current'] == d['target'] and d['target'] > 0: is_hl, cell_bg = True, HIGHLIGHT_BG
                 
+                # Only highlight progress table (current), goal table stays clean? 
+                # User said "colores... forma es lo que quiero cambiar", but mockup showed colors in pending.
+                # I'll apply colors to both by default as it was, but it's more useful in 'current' mode.
+                # If we are in 'target' mode, maybe we don't highlight? No, user said "siempre siguiendo lo del amarillo y rojo".
                 draw.rectangle([cx, curr_y, cx + cw, curr_y + row_h], fill=cell_bg, outline=BORDER_COLOR)
                 if val_str:
                     tw, th = get_text_size(val_str, bold_font if (is_hl or is_ex) else font)
@@ -242,7 +266,10 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
                 
             # Row Totals
             rt = cs['row_totals'][r_label]
-            rt_str = f"{rt['current']}/{rt['target']}"
+            if display_mode == 'target': rt_str = str(rt['target'])
+            elif display_mode == 'current': rt_str = str(rt['current'])
+            else: rt_str = f"{rt['current']}/{rt['target']}"
+            
             is_hl = rt['current'] == rt['target'] and rt['target'] > 0 and not rt['any_exceeded']
             is_ex = rt['current'] > rt['target']
             bg_tot = EXCEEDED_BG if is_ex else (HIGHLIGHT_BG if is_hl else bg)
@@ -254,14 +281,17 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
 
         # Section Totals
         cx = start_x
-        draw.rectangle([cx, curr_y, cx + col_w[0], curr_y + row_h], fill=HEADER_BG, outline=BORDER_COLOR)
+        draw.rectangle([cx, curr_y, cx + col_w[0], curr_y + row_h], fill=h_bg, outline=BORDER_COLOR)
         tw, th = get_text_size("Total", bold_font)
         draw.text((cx + (col_w[0] - tw)//2, curr_y + (row_h - th)//2), "Total", fill=HEADER_TEXT, font=bold_font)
         cx += col_w[0]
 
         for c_idx, (fn, ln) in enumerate(flat_cols):
             ct = cs['col_totals'][(fn, ln)]
-            ct_str = f"{ct['current']}/{ct['target']}"
+            if display_mode == 'target': ct_str = str(ct['target'])
+            elif display_mode == 'current': ct_str = str(ct['current'])
+            else: ct_str = f"{ct['current']}/{ct['target']}"
+            
             is_hl = ct['current'] == ct['target'] and ct['target'] > 0 and not ct['any_exceeded']
             is_ex = ct['current'] > ct['target']
             bg_tot = EXCEEDED_BG if is_ex else (HIGHLIGHT_BG if is_hl else CELL_BG_ALT)
@@ -272,7 +302,10 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
             cx += col_w[c_idx+1]
         
         gt = cs['grand_total']
-        gt_str = f"{gt['current']}/{gt['target']}"
+        if display_mode == 'target': gt_str = str(gt['target'])
+        elif display_mode == 'current': gt_str = str(gt['current'])
+        else: gt_str = f"{gt['current']}/{gt['target']}"
+        
         is_hl = gt['current'] == gt['target'] and gt['target'] > 0 and not gt['any_exceeded']
         is_ex = gt['current'] > gt['target']
         bg_gt = EXCEEDED_BG if is_ex else (HIGHLIGHT_BG if is_hl else CELL_BG_ALT)
@@ -293,11 +326,22 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
 
 # Keep the original function as a wrapper for backward compatibility
 def generate_quota_table_image(data_map, ordered_first_nodes, ordered_leaf_nodes, sorted_rows, study_code, output_path="quota_report.png"):
-    section = {
-        'title': 'Estado de Cuotas',
+    sec1 = {
+        'title': 'Cuota a Realizar',
         'data_map': data_map,
         'ordered_first_nodes': ordered_first_nodes,
         'ordered_leaf_nodes': ordered_leaf_nodes,
-        'sorted_rows': sorted_rows
+        'sorted_rows': sorted_rows,
+        'display_mode': 'target',
+        'header_bg': (70, 130, 180) # Steel Blue
     }
-    return generate_multi_table_report([section], study_code, output_path)
+    sec2 = {
+        'title': 'Cuota Realizada',
+        'data_map': data_map,
+        'ordered_first_nodes': ordered_first_nodes,
+        'ordered_leaf_nodes': ordered_leaf_nodes,
+        'sorted_rows': sorted_rows,
+        'display_mode': 'current',
+        'header_bg': (230, 126, 34) # Carrot Orange
+    }
+    return generate_multi_table_report([sec1, sec2], study_code, output_path)
