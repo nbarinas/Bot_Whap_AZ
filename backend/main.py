@@ -1775,11 +1775,13 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
 def send_quota_report_to_agents(db, study_code, phones, caption=""):
     """
     Helper to send a visual quota report to one or more agents. 
-    Renders and uploads once, spreads to all.
+    Renders and uploads once per format needed, then spreads.
     """
     try:
-        # Import inside to avoid circular deps or load order issues if any
         from . import models, render_utils, upload_media
+        
+        # 0. Pilot Configuration
+        PILOT_PHONES = ["3001846907", "573001846907"]
         
         # 1. Get components for the image
         all_study_quotas = db.query(models.BotQuota).filter(
@@ -1822,40 +1824,54 @@ def send_quota_report_to_agents(db, study_code, phones, caption=""):
             ordered_lns = {fn: sorted(list(col_tree[fn])) for fn in ordered_fns}
             return data_map, ordered_fns, ordered_lns, sorted(list(row_keys))
 
-        sections = []
-        # Group 1: Demographic (Standard)
+        standard_sections = []
         std_quotas = [q for q in all_study_quotas if q.category != "Tipo de Punto"]
         if std_quotas:
             dm, ofn, oln, sr = build_sec_data(std_quotas)
-            sections.append({ 'title': 'Cuota Demográfica', 'data_map': dm, 'ordered_first_nodes': ofn, 'ordered_leaf_nodes': oln, 'sorted_rows': sr })
+            standard_sections.append({ 'title': 'Cuota Demográfica', 'data_map': dm, 'ordered_first_nodes': ofn, 'ordered_leaf_nodes': oln, 'sorted_rows': sr })
         
-        # Group 2: Point Types
         pt_quotas = [q for q in all_study_quotas if q.category == "Tipo de Punto"]
         if pt_quotas:
             dm, ofn, oln, sr = build_sec_data(pt_quotas)
-            sections.append({ 'title': 'Cuota Tipos de Puntos', 'data_map': dm, 'ordered_first_nodes': ofn, 'ordered_leaf_nodes': oln, 'sorted_rows': sr })
+            standard_sections.append({ 'title': 'Cuota Tipos de Puntos', 'data_map': dm, 'ordered_first_nodes': ofn, 'ordered_leaf_nodes': oln, 'sorted_rows': sr })
 
-        # 2. Render Image
-        img_filename = f"broadcast_{study_code}.png"
-        img_path = os.path.join(BASE_DIR, img_filename)
-        render_utils.generate_multi_table_report(sections, study_code, img_path)
+        # 2. Determine who needs what
+        has_pilot = any(p in PILOT_PHONES for p in phones)
+        has_standard = any(p not in PILOT_PHONES for p in phones)
         
-        # 3. Upload to Meta
-        print(f"DEBUG: Uploading broadcast image for {study_code}...")
-        media_id = upload_media.upload_media(img_path, "image/png")
+        media_id_standard = None
+        media_id_pilot = None
         
-        if media_id:
-            # 4. Broadcast to all recipients
-            cap = caption if caption else f"📊 Cuotas Actualizadas: *{study_code.upper()}*"
-            for phone in phones:
-                try:
-                    send_whatsapp_media(phone, "image", media_id, cap)
-                except Exception as ex:
-                    print(f"Error broadcasting to {phone}: {ex}")
-        
-        # Clean up
-        if os.path.exists(img_path):
-            os.remove(img_path)
+        cap = caption if caption else f"📊 Cuotas Actualizadas: *{study_code.upper()}*"
+
+        # 3. Process Standard (1/10 format)
+        if has_standard:
+            img_std_path = os.path.join(BASE_DIR, f"std_{study_code}.png")
+            render_utils.generate_multi_table_report(standard_sections, study_code, img_std_path)
+            media_id_standard = upload_media.upload_media(img_std_path, "image/png")
+            if os.path.exists(img_std_path): os.remove(img_std_path)
+
+        # 4. Process Pilot (Split format)
+        if has_pilot:
+            img_pilot_path = os.path.join(BASE_DIR, f"pilot_{study_code}.png")
+            pilot_sections = render_utils.get_pilot_sections(standard_sections)
+            render_utils.generate_multi_table_report(pilot_sections, study_code, img_pilot_path)
+            media_id_pilot = upload_media.upload_media(img_pilot_path, "image/png")
+            if os.path.exists(img_pilot_path): os.remove(img_pilot_path)
+
+        # 5. Distribute
+        for phone in phones:
+            try:
+                if phone in PILOT_PHONES:
+                    if media_id_pilot:
+                        send_whatsapp_media(phone, "image", media_id_pilot, cap)
+                    elif media_id_standard: # Fallback
+                        send_whatsapp_media(phone, "image", media_id_standard, cap)
+                else:
+                    if media_id_standard:
+                        send_whatsapp_media(phone, "image", media_id_standard, cap)
+            except Exception as ex:
+                print(f"Error broadcasting to {phone}: {ex}")
             
     except Exception as e:
         print(f"Error in send_quota_report_to_agents: {e}")
