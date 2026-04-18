@@ -18,8 +18,8 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
     """
     # Stylistic constants
     PADDING = 30
-    CELL_PADDING_H = 15
-    CELL_PADDING_V = 10
+    CELL_PADDING_H = 10
+    CELL_PADDING_V = 8
     HEADER_BG = (45, 52, 71) 
     HEADER_TEXT = (255, 255, 255)
     CELL_BG = (255, 255, 255)
@@ -39,14 +39,14 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
 
     for fp in possible_fonts:
         if os.path.exists(fp):
-            font = ImageFont.truetype(fp, 16)
-            footer_font = ImageFont.truetype(fp, 13)
+            font = ImageFont.truetype(fp, 14)
+            footer_font = ImageFont.truetype(fp, 12)
             break
     for bp in possible_bolds:
         if os.path.exists(bp):
-            bold_font = ImageFont.truetype(bp, 16)
-            section_font = ImageFont.truetype(bp, 19)
-            title_font = ImageFont.truetype(bp, 24)
+            bold_font = ImageFont.truetype(bp, 14)
+            section_font = ImageFont.truetype(bp, 18)
+            title_font = ImageFont.truetype(bp, 22)
             break
     
     if not font: font = footer_font = ImageFont.load_default()
@@ -84,7 +84,7 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
         for fn in ordered_first_nodes:
             for ln in ordered_leaf_nodes[fn]:
                 flat_cols.append((fn, ln))
-                wrapped_headers[(fn, ln)] = wrap_text(ln, 11)
+                wrapped_headers[(fn, ln)] = wrap_text(ln, 9)
         
         row_totals = {r: {'current': 0, 'target': 0, 'any_exceeded': False} for r in sorted_rows}
         col_totals = {(fn, ln): {'current': 0, 'target': 0, 'any_exceeded': False} for fn, ln in flat_cols}
@@ -111,7 +111,9 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
         col_widths = [col0_w]
         for fn, ln in flat_cols:
             lines = wrapped_headers[(fn, ln)]
-            max_header_w = max([get_text_size(line, bold_font)[0] for line in lines + [fn]])
+            # BUG FIX: Don't include 'fn' (Group Header) in individual column width. 
+            # 'fn' spans multiple columns, their individual width should only care about 'ln' (Leaf Header).
+            max_header_w = max([get_text_size(line, bold_font)[0] for line in lines])
             
             max_val_w = 0
             for r in sorted_rows:
