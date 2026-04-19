@@ -167,25 +167,44 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     return {"access_token": access_token, "token_type": "bearer", "role": user.role}
 
 class QuotaCreateUpdate(BaseModel):
+    study_id: Optional[int] = None
     study_code: str
     category: str
     value: str
     target_count: int
     point_type: Optional[str] = None
+    study_type: Optional[str] = 'STANDARD'
+
+def get_or_create_study(db: Session, name: str, study_type: str = 'STANDARD'):
+    study = db.query(models.BotStudy).filter(models.BotStudy.name == name).first()
+    if not study:
+        study = models.BotStudy(name=name, study_type=study_type)
+        db.add(study)
+        db.commit()
+        db.refresh(study)
+    return study
 
 @app.get("/api/quotas")
-def get_bot_quotas(study_code: Optional[str] = None, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
+def get_bot_quotas(study_code: Optional[str] = None, study_id: Optional[int] = None, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
     query = db.query(models.BotQuota)
-    if study_code:
+    if study_id:
+        query = query.filter(models.BotQuota.study_id == study_id)
+    elif study_code:
         query = query.filter(models.BotQuota.study_code == study_code)
     quotas = query.all()
     
     result = {}
     for q in quotas:
-        if q.study_code not in result:
-            result[q.study_code] = []
-        result[q.study_code].append({
+        # Usar el nombre del estudio como clave principal en el diccionario de respuesta (para compatibilidad frontend)
+        # Pero incluimos el ID en los datos de cada cuota
+        s_name = q.study.name if q.study else q.study_code
+        if s_name not in result:
+            result[s_name] = []
+        
+        result[s_name].append({
             "id": q.id,
+            "study_id": q.study_id,
+            "study_name": s_name,
             "category": q.category,
             "value": q.value,
             "target_count": q.target_count,
@@ -223,8 +242,11 @@ async def upload_tdc_study(study_code: str = Form(...), file: UploadFile = File(
         elif 'supervisor' in col: col_map['supervisor'] = col
         elif 'fecha' in col or 'date' in col or 'dia' in col or 'día' in col: col_map['fecha'] = col
     
-    # Delete existing quotas for this study
-    db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).delete()
+    # Asegurar que el estudio existe
+    study = get_or_create_study(db, study_code, 'TDC')
+
+    # Delete existing quotas for this study (by ID or code)
+    db.query(models.BotQuota).filter((models.BotQuota.study_id == study.id) | (models.BotQuota.study_code == study_code)).delete()
     db.commit()
     
     created = 0
@@ -240,6 +262,7 @@ async def upload_tdc_study(study_code: str = Form(...), file: UploadFile = File(
             if not barrio or not nombre: continue
             
             quota = models.BotQuota(
+                study_id=study.id,
                 study_code=study_code,
                 category=barrio,
                 value=f"{store_num} - {nombre}",
@@ -257,47 +280,61 @@ async def upload_tdc_study(study_code: str = Form(...), file: UploadFile = File(
             continue
     
     db.commit()
-    return {"msg": f"✅ Estudio TDC '{study_code}' creado con {created} tiendas."}
+    return {"msg": f"✅ Estudio TDC '{study_code}' (ID: {study.id}) creado con {created} tiendas."}
 
 @app.post("/api/quotas")
 def create_or_update_quota(quota_in: QuotaCreateUpdate, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
+    # Asegurar que el estudio existe en la tabla maestra
+    study = get_or_create_study(db, quota_in.study_code, quota_in.study_type or 'STANDARD')
+    
     quota = db.query(models.BotQuota).filter(
-        models.BotQuota.study_code == quota_in.study_code,
+        (models.BotQuota.study_id == study.id) | (models.BotQuota.study_code == quota_in.study_code),
         models.BotQuota.category == quota_in.category,
         models.BotQuota.value == quota_in.value
     ).first()
     
     if quota:
+        quota.study_id = study.id # Asegurar vínculo
         quota.target_count = quota_in.target_count
         quota.point_type = quota_in.point_type
         db.commit()
         db.refresh(quota)
-        return {"msg": "Quota updated", "id": quota.id}
+        return {"msg": "Quota updated", "id": quota.id, "study_id": study.id}
     else:
         new_quota = models.BotQuota(
+            study_id=study.id,
             study_code=quota_in.study_code,
             category=quota_in.category,
             value=quota_in.value,
             target_count=quota_in.target_count,
             current_count=0,
-            point_type=quota_in.point_type
+            point_type=quota_in.point_type,
+            study_type=study.study_type
         )
         db.add(new_quota)
         db.commit()
         db.refresh(new_quota)
-        return {"msg": "Quota created", "id": new_quota.id}
+        return {"msg": "Quota created", "id": new_quota.id, "study_id": study.id}
 
 @app.post("/api/quotas/batch")
 def create_or_update_quotas_batch(quotas_in: list[QuotaCreateUpdate], db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
+    if not quotas_in: return {"msg": "No data"}
+    
+    # Obtener el estudio de la primera entrada
+    s_code = quotas_in[0].study_code
+    s_type = quotas_in[0].study_type or 'STANDARD'
+    study = get_or_create_study(db, s_code, s_type)
+    
     results = []
     for quota_in in quotas_in:
         quota = db.query(models.BotQuota).filter(
-            models.BotQuota.study_code == quota_in.study_code,
+            (models.BotQuota.study_id == study.id) | (models.BotQuota.study_code == quota_in.study_code),
             models.BotQuota.category == quota_in.category,
             models.BotQuota.value == quota_in.value
         ).first()
         
         if quota:
+            quota.study_id = study.id
             quota.target_count = quota_in.target_count
             quota.point_type = quota_in.point_type
             db.commit()
@@ -305,18 +342,21 @@ def create_or_update_quotas_batch(quotas_in: list[QuotaCreateUpdate], db: Sessio
             results.append(quota.id)
         else:
             new_quota = models.BotQuota(
+                study_id=study.id,
                 study_code=quota_in.study_code,
                 category=quota_in.category,
                 value=quota_in.value,
                 target_count=quota_in.target_count,
                 current_count=0,
-                point_type=quota_in.point_type
+                point_type=quota_in.point_type,
+                study_type=study.study_type
             )
             db.add(new_quota)
             db.commit()
             db.refresh(new_quota)
             results.append(new_quota.id)
-    return {"msg": "Batch quotes processed", "ids": results}
+            
+    return {"msg": f"Batch quotes processed for {s_code}", "study_id": study.id, "ids": results}
 
 @app.delete("/api/quotas/{quota_id}")
 def delete_quota(quota_id: int, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
