@@ -320,30 +320,35 @@ def create_or_update_quota(quota_in: QuotaCreateUpdate, db: Session = Depends(da
 def create_or_update_quotas_batch(quotas_in: list[QuotaCreateUpdate], db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
     if not quotas_in: return {"msg": "No data"}
     
-    # Obtener el estudio de la primera entrada
-    s_code = quotas_in[0].study_code
-    s_type = quotas_in[0].study_type or 'STANDARD'
-    study = get_or_create_study(db, s_code, s_type)
+    # Obtener el estudio (usando ID si viene, o código como respaldo)
+    first = quotas_in[0]
+    study = None
+    if first.study_id:
+        study = db.query(models.BotStudy).get(first.study_id)
     
-    results = []
+    if not study:
+        s_code = first.study_code
+        s_type = first.study_type or 'STANDARD'
+        study = get_or_create_study(db, s_code, s_type)
+    
+    results_ids = []
     for quota_in in quotas_in:
+        # Buscar por ID de estudio + categoría + valor
         quota = db.query(models.BotQuota).filter(
-            (models.BotQuota.study_id == study.id) | (models.BotQuota.study_code == quota_in.study_code),
+            models.BotQuota.study_id == study.id,
             models.BotQuota.category == quota_in.category,
             models.BotQuota.value == quota_in.value
         ).first()
         
         if quota:
-            quota.study_id = study.id
             quota.target_count = quota_in.target_count
             quota.point_type = quota_in.point_type
             db.commit()
-            db.refresh(quota)
-            results.append(quota.id)
+            results_ids.append(quota.id)
         else:
             new_quota = models.BotQuota(
                 study_id=study.id,
-                study_code=quota_in.study_code,
+                study_code=study.name,
                 category=quota_in.category,
                 value=quota_in.value,
                 target_count=quota_in.target_count,
@@ -354,9 +359,17 @@ def create_or_update_quotas_batch(quotas_in: list[QuotaCreateUpdate], db: Sessio
             db.add(new_quota)
             db.commit()
             db.refresh(new_quota)
-            results.append(new_quota.id)
-            
-    return {"msg": f"Batch quotes processed for {s_code}", "study_id": study.id, "ids": results}
+            results_ids.append(new_quota.id)
+    
+    # LIMPIEZA ATÓMICA: Borrar cuotas del estudio que NO están en el nuevo set
+    if results_ids:
+        db.query(models.BotQuota).filter(
+            models.BotQuota.study_id == study.id,
+            models.BotQuota.id.notin_(results_ids)
+        ).delete(synchronize_session=False)
+        db.commit()
+
+    return {"msg": "Batch synced successfully", "study_id": study.id, "count": len(results_ids)}
 
 @app.delete("/api/quotas/{quota_id}")
 def delete_quota(quota_id: int, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
