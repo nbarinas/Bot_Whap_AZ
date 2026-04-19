@@ -512,6 +512,8 @@ async function saveBatchQuotas() {
     const studyCode = document.getElementById('studyCode').value.trim();
     if (!studyCode) { alert("Ingresa el ID del estudio"); return; }
 
+    const studyId = document.getElementById('studyIdHidden').value;
+
     const payload = [];
     document.querySelectorAll('.htable-input').forEach(input => {
         const cat = input.getAttribute('data-cat');
@@ -519,7 +521,14 @@ async function saveBatchQuotas() {
         const rowPoint = input.getAttribute('data-point') || 'General';
         const target = parseInt(input.value, 10);
         if (target >= 0) {
-            payload.push({ study_code: studyCode, category: cat, value: val, target_count: target, point_type: rowPoint });
+            payload.push({ 
+                study_id: studyId ? parseInt(studyId, 10) : null,
+                study_code: studyCode, 
+                category: cat, 
+                value: val, 
+                target_count: target, 
+                point_type: rowPoint 
+            });
         }
     });
 
@@ -580,19 +589,8 @@ function editStudy(studyId, studyCode) {
                     return;
                 }
 
-                // Abrimos el modal
                 openModal();
                 
-                // 1. Poblamos datos básicos
-                const studyIdInput = document.getElementById('studyCode');
-                const totalSurveysInput = document.getElementById('totalSurveys');
-                
-                if (studyIdInput) {
-                    studyIdInput.value = studyCode;
-                    studyIdInput.readOnly = true;
-                }
-
-                // 2. Inferir configuración (Total y Categorías)
                 let inferredTotal = 0;
                 const foundCats = new Set();
                 const customAges = new Set();
@@ -612,21 +610,32 @@ function editStudy(studyId, studyCode) {
                             inferredTotal += (q.target_count || 0);
                         }
 
-                        // Categorías (Demográficas)
+                        // Categorías (Demográficas) - Detección inteligente
                         const dims = ["Género", "Región", "Edad", "NSE"];
+                        
+                        // 1. Detección por nombre explícito
                         dims.forEach(d => {
-                            const defs = DEFAULT_CATEGORIES[d] || [];
-                            // Revisar si el nombre de la categoría o el valor coinciden con alguna dimensión conocida
-                            if (q.category.includes(d) || defs.some(v => q.category.includes(v)) || defs.includes(q.value)) {
-                                foundCats.add(d);
-                            }
+                            if (q.category.includes(d)) foundCats.add(d);
                         });
 
-                        // Detección especial de Edades personalizadas
-                        if (q.category.includes("Edad") || foundCats.has("Edad")) {
-                            if (q.value && !DEFAULT_CATEGORIES["Edad"].includes(q.value) && (q.value.includes("-") || q.value.includes("+"))) {
-                                customAges.add(q.value);
-                            }
+                        // 2. Detección por patrones de contenido
+                        // Patrón Edad: Tiene guion (20-35) o signo más (45+)
+                        if (q.category.includes("-") || q.category.includes("+") || q.value.includes("-") || q.value.includes("+")) {
+                            foundCats.add("Edad");
+                            if (q.value.includes("-") || q.value.includes("+")) customAges.add(q.value);
+                            else customAges.add(q.category);
+                        }
+
+                        // Patrón NSE: Valores estándar (MT, MB, BA)
+                        const nseVals = ["MT", "MB", "BA"];
+                        if (nseVals.some(v => q.category.includes(v)) || nseVals.includes(q.value)) {
+                            foundCats.add("NSE");
+                        }
+
+                        // Patrón Género: Hombre/Mujer
+                        const genderVals = ["Hombre", "Mujer"];
+                        if (genderVals.some(v => q.category.includes(v)) || genderVals.includes(q.value)) {
+                            foundCats.add("Género");
                         }
                     }
                 });
