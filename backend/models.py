@@ -13,10 +13,25 @@ class User(UsersBase):
     phone_number = Column(String(20))
     last_seen = Column(DateTime)
 
+class BotStudy(Base):
+    __tablename__ = "bot_studies"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(200), unique=True, index=True)
+    study_type = Column(String(20), default='STANDARD') # 'STANDARD' or 'TDC'
+    is_closed = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Relationships
+    quotas = relationship("BotQuota", back_populates="study")
+    updates = relationship("BotQuotaUpdate", back_populates="study")
+    subscriptions = relationship("BotStudySubscription", back_populates="study")
+
 class BotQuota(Base):
     __tablename__ = "bot_quotas"
     
     id = Column(Integer, primary_key=True, index=True)
+    study_id = Column(Integer, ForeignKey("bot_studies.id"), nullable=True)
     study_code = Column(String(50), index=True) 
     category = Column(String(50)) 
     value = Column(String(100)) 
@@ -28,6 +43,8 @@ class BotQuota(Base):
     store_id = Column(Integer, nullable=True)              # TDC: número de tienda
     planned_supervisor = Column(String(100), nullable=True)
     planned_interviewer = Column(String(100), nullable=True)
+    
+    study = relationship("BotStudy", back_populates="quotas")
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -56,10 +73,13 @@ class BotQuotaUpdate(Base):
     __tablename__ = "bot_quota_updates"
     
     id = Column(Integer, primary_key=True, index=True)
+    study_id = Column(Integer, ForeignKey("bot_studies.id"), nullable=True)
     study_code = Column(String(50), index=True)
     phone_number = Column(String(50)) # WhatsApp number instead of generic user_id
     message_text = Column(String(500)) 
     parsed_updates = Column(Text) 
+    
+    study = relationship("BotStudy", back_populates="updates")
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -87,6 +107,9 @@ class BotStudySubscription(Base):
     __tablename__ = "bot_study_subscriptions"
     
     id = Column(Integer, primary_key=True, index=True)
+    study_id = Column(Integer, ForeignKey("bot_studies.id"), nullable=True)
     phone_number = Column(String(50), index=True)
     study_code = Column(String(50), index=True)
     subscribed_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    study = relationship("BotStudy", back_populates="subscriptions")

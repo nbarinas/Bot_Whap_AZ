@@ -58,7 +58,10 @@ async function loadQuotas() {
         const showClosed = document.getElementById('showClosedStudies') ? document.getElementById('showClosedStudies').checked : false;
 
         for (const [studyCode, quotas] of Object.entries(data)) {
-            const isClosed = quotas.length > 0 && quotas[0].is_closed === 1;
+            if (quotas.length === 0) continue;
+            
+            const studyId = quotas[0].study_id;
+            const isClosed = quotas[0].is_closed === 1;
             if (isClosed && !showClosed) continue;
             
             const stdRoot = {};
@@ -107,14 +110,14 @@ async function loadQuotas() {
             studyWrapper.style.marginBottom = "2.5rem";
             studyWrapper.innerHTML = `
                 <div class="study-label" style="${isClosed ? 'background: #94a3b8;' : ''}">
-                    <span>ESTUDIO: ${studyCode} ${statusBadge} <span style="font-size:0.8rem; background:rgba(255,255,255,0.2); color:white; padding:2px 8px; border-radius:10px; margin-left:10px;">${quotas.length} ítems</span></span>
+                    <span>ESTUDIO: ${studyCode} ${statusBadge} <span style="font-size:0.8rem; background:rgba(255,255,255,0.2); color:white; padding:2px 8px; border-radius:10px; margin-left:10px;">ID: ${studyId || 'N/A'} | ${quotas.length} ítems</span></span>
                     <div style="display:flex; gap: 8px;">
-                        <button onclick="toggleStudyStatus('${studyCode}')" style="background:${lockColor}; color:white; border:none; padding:4px 10px; border-radius:6px; cursor:pointer;" title="${lockTitle}"><i class="fas ${lockIcon}"></i></button>
-                        <button onclick="exportStudyData('${studyCode}')" style="background:#16a34a; color:white; border:none; padding:4px 12px; border-radius:6px; cursor:pointer; font-weight:bold; display:flex; align-items:center; gap:5px;" title="Descargar Reporte Excel">
+                        <button onclick="toggleStudyStatus('${studyId}', '${studyCode}')" style="background:${lockColor}; color:white; border:none; padding:4px 10px; border-radius:6px; cursor:pointer;" title="${lockTitle}"><i class="fas ${lockIcon}"></i></button>
+                        <button onclick="exportStudyData('${studyId}', '${studyCode}')" style="background:#16a34a; color:white; border:none; padding:4px 12px; border-radius:6px; cursor:pointer; font-weight:bold; display:flex; align-items:center; gap:5px;" title="Descargar Reporte Excel">
                            <i class="fas fa-file-excel"></i> <span>Reporte</span>
                         </button>
-                        <button onclick="editStudy('${studyCode}')" style="background:var(--warning); color:white; border:none; padding:4px 10px; border-radius:6px; cursor:pointer;" title="Editar Estudio"><i class="fas fa-edit"></i></button>
-                        <button onclick="deleteStudyGlobal('${studyCode}')" style="background:var(--danger); color:white; border:none; padding:4px 10px; border-radius:6px; cursor:pointer;" title="Eliminar Estudio"><i class="fas fa-trash-alt"></i></button>
+                        <button onclick="editStudy('${studyId}', '${studyCode}')" style="background:var(--warning); color:white; border:none; padding:4px 10px; border-radius:6px; cursor:pointer;" title="Editar Estudio"><i class="fas fa-edit"></i></button>
+                        <button onclick="deleteStudyGlobal('${studyId}', '${studyCode}')" style="background:var(--danger); color:white; border:none; padding:4px 10px; border-radius:6px; cursor:pointer;" title="Eliminar Estudio"><i class="fas fa-trash-alt"></i></button>
                     </div>
                 </div>
                 <div style="display: flex; flex-wrap: wrap; gap: 20px; padding: 15px; background: #fff; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; ${isClosed ? 'opacity:0.6; pointer-events:none;' : ''}">
@@ -461,7 +464,7 @@ function openModal() {
     document.getElementById('studyCode').value = '';
     document.getElementById('totalSurveys').value = '';
     document.getElementById('studyCode').readOnly = false;
-    document.getElementById('pointType').value = 'General';
+
     document.querySelectorAll('.category-toggles input[type="checkbox"]').forEach(cb => cb.checked = false);
 
     const ptContainer = document.getElementById('dynamicPointTypeContainer');
@@ -543,40 +546,162 @@ async function deleteStudyGlobal(studyCode) {
     }
 }
 
-function editStudy(studyCode) {
+function editStudy(studyId, studyCode) {
+    if (!studyCode) return;
+    console.log("Editando estudio ID:", studyId, "Nombre:", studyCode);
+    
     if (confirm("¿Quieres editar los objetivos de cuota para el estudio " + studyCode + "?")) {
-        // Fetch current quotas for this study to populate the modal
-        fetchWithAuth('/api/quotas?study_code=' + studyCode)
-            .then(res => res.json())
+        // Preferimos el study_id para la consulta si está disponible
+        const url = studyId && studyId !== 'undefined' ? 
+                    '/api/quotas?study_id=' + studyId : 
+                    '/api/quotas?study_code=' + encodeURIComponent(studyCode);
+        
+        fetchWithAuth(url)
+            .then(async res => {
+                if (!res.ok) {
+                    const errText = await res.text();
+                    throw new Error(`Servidor respondió con status ${res.status}: ${errText}`);
+                }
+                return res.json();
+            })
             .then(data => {
-                const quotas = data[studyCode];
-                if (!quotas) return;
-
-                openModal();
-                document.getElementById('studyCode').value = studyCode;
-                document.getElementById('studyCode').readOnly = true;
-                // Note: We don't restore checkboxes/categories easily here for now as it's a batch edit
+                console.log("Datos para edición recibidos:", data);
                 
-                // We show them in a simplified tree in the proposals container
-                const root = {};
-                quotas.forEach(q => {
-                    const parts = q.category === "General" ? [] : q.category.split(" | ");
-                    let current = root;
-                    parts.forEach((p, idx) => {
-                        if (!current[p]) {
-                            current[p] = (idx === parts.length - 1) ? { __isLeaf: true, __quotas: [] } : {};
+                // Buscamos las cuotas. Manejamos tanto data[studyCode] como data si viene plano.
+                let quotasArr = data[studyCode];
+                if (!quotasArr || quotasArr.length === 0) {
+                    // Si no está bajo la clave del nombre, quizás es el primer elemento del objeto
+                    const keys = Object.keys(data);
+                    if (keys.length > 0) quotasArr = data[keys[0]];
+                }
+
+                if (!quotasArr || quotasArr.length === 0) {
+                    alert("No se encontraron registros de cuotas para el estudio: " + studyCode);
+                    return;
+                }
+
+                // Abrimos el modal
+                openModal();
+                
+                // 1. Poblamos datos básicos
+                const studyIdInput = document.getElementById('studyCode');
+                const totalSurveysInput = document.getElementById('totalSurveys');
+                
+                if (studyIdInput) {
+                    studyIdInput.value = studyCode;
+                    studyIdInput.readOnly = true;
+                }
+
+                // 2. Inferir configuración (Total y Categorías)
+                let inferredTotal = 0;
+                const foundCats = new Set();
+                const customAges = new Set();
+                const customPoints = new Set();
+                let hasPointType = false;
+
+                // Identificamos la primera categoría para sumar el total sin duplicar por dimensiones cruzadas
+                const firstStandardCat = quotasArr.find(q => q.category !== "Tipo de Punto" && q.category !== "General")?.category || "General";
+                
+                quotasArr.forEach(q => {
+                    if (q.category === "Tipo de Punto") {
+                        hasPointType = true;
+                        if (q.value) customPoints.add(q.value);
+                    } else {
+                        // Total
+                        if (q.category === firstStandardCat) {
+                            inferredTotal += (q.target_count || 0);
                         }
-                        current = current[p];
-                    });
-                    if (parts.length === 0) {
-                        if (!current['General']) current['General'] = { __isLeaf: true, __quotas: [] };
-                        current = current['General'];
+
+                        // Categorías (Demográficas)
+                        const dims = ["Género", "Región", "Edad", "NSE"];
+                        dims.forEach(d => {
+                            const defs = DEFAULT_CATEGORIES[d] || [];
+                            // Revisar si el nombre de la categoría o el valor coinciden con alguna dimensión conocida
+                            if (q.category.includes(d) || defs.some(v => q.category.includes(v)) || defs.includes(q.value)) {
+                                foundCats.add(d);
+                            }
+                        });
+
+                        // Detección especial de Edades personalizadas
+                        if (q.category.includes("Edad") || foundCats.has("Edad")) {
+                            if (q.value && !DEFAULT_CATEGORIES["Edad"].includes(q.value) && (q.value.includes("-") || q.value.includes("+"))) {
+                                customAges.add(q.value);
+                            }
+                        }
                     }
-                    current.__quotas.push({ val: q.value, target: q.target_count, dbCat: q.category });
                 });
 
-                const html = renderTreeHtml(root, true, 0, true);
-                document.getElementById('proposalsContainer').innerHTML = `<div class="htable-container" style="border-width:1px; margin-bottom:0;"><div class="htable-root-groups">${html}</div></div>`;
+                if (totalSurveysInput) totalSurveysInput.value = inferredTotal;
+
+                // 3. Marcar Checkboxes
+                document.querySelectorAll('.category-toggles input[type="checkbox"]').forEach(cb => {
+                    if (foundCats.has(cb.value) || (cb.value === "Tipo de Punto" && hasPointType)) {
+                        cb.checked = true;
+                    }
+                });
+
+                // 4. Restaurar Edades Personalizadas
+                if (foundCats.has("Edad") && customAges.size > 0) {
+                    const ageList = document.getElementById('ageInputsList');
+                    if (ageList) {
+                        ageList.innerHTML = '';
+                        customAges.forEach(age => {
+                            const input = document.createElement('input');
+                            input.type = 'text';
+                            input.className = 'age-input-field';
+                            input.value = age;
+                            input.style = 'width:100px; padding:6px; border:1px solid #ccc; border-radius:5px; text-align:center; font-weight:600;';
+                            input.oninput = generateProposals;
+                            ageList.appendChild(input);
+                        });
+                    }
+                }
+                toggleAgeInputs();
+
+                // 5. Restaurar Tipos de Puntos
+                if (hasPointType && customPoints.size > 0) {
+                    const ptList = document.getElementById('pointTypeInputsList');
+                    if (ptList) {
+                        ptList.innerHTML = '';
+                        customPoints.forEach(pt => {
+                            ptList.appendChild(createPointTypeInput(pt));
+                        });
+                    }
+                }
+                togglePointTypeInputs();
+
+                // 6. Generar Estructura e Inyectar Valores Reales
+                console.log("Generando tabla y restaurando valores...");
+                generateProposals();
+
+                // Crear mapa de valores reales para inyección rápida
+                const quotaMap = {};
+                quotasArr.forEach(q => {
+                    const key = `${q.category}|${q.value}|${q.point_type || 'General'}`;
+                    quotaMap[key] = q.target_count;
+                });
+
+                // Retraso para esperar a que DOM se construya
+                setTimeout(() => {
+                    let restoredCount = 0;
+                    document.querySelectorAll('.htable-input').forEach(input => {
+                        const cat = input.getAttribute('data-cat');
+                        const val = input.getAttribute('data-val');
+                        const point = input.getAttribute('data-point') || 'General';
+                        const key = `${cat}|${val}|${point}`;
+                        
+                        if (quotaMap[key] !== undefined) {
+                            input.value = quotaMap[key];
+                            restoredCount++;
+                        }
+                    });
+                    console.log(`Edición lista. Se restauraron ${restoredCount} valores.`);
+                }, 300);
+
+            })
+            .catch(err => {
+                console.error("Error detallado en editStudy:", err);
+                alert("No se pudo cargar el estudio para editar.\nDetalle: " + err.message);
             });
     }
 }
