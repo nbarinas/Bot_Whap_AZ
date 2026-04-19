@@ -590,7 +590,14 @@ function editStudy(studyId, studyCode) {
                 }
 
                 openModal();
+
+                const scInput = document.getElementById('studyCode');
+                const totalSurveysInput = document.getElementById('totalSurveys');
+                const idHidden = document.getElementById('studyIdHidden');
                 
+                if (scInput) scInput.value = studyCode;
+                if (idHidden) idHidden.value = studyId || "";
+
                 let inferredTotal = 0;
                 const foundCats = new Set();
                 const customAges = new Set();
