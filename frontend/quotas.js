@@ -635,7 +635,9 @@ function editStudy(studyId, studyCode) {
 
                 // 3. Marcar Checkboxes
                 document.querySelectorAll('.category-toggles input[type="checkbox"]').forEach(cb => {
-                    if (foundCats.has(cb.value) || (cb.value === "Tipo de Punto" && hasPointType)) {
+                    if (foundCats.has(cb.value) || 
+                        (cb.value === "Tipo de Punto" && hasPointType) ||
+                        (cb.value === "Edad" && customAges.size > 0)) {
                         cb.checked = true;
                     }
                 });
