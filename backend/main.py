@@ -160,6 +160,10 @@ def on_startup():
         # Bot's internal database (SQLite/Postgres) - Required for operation
         models.Base.metadata.create_all(bind=database.bot_engine)
         
+        # Initialize Fallback Users DB (SQLite) - Required if Primary DB fails
+        # This prevents "no such table: users" errors in Contingency Mode
+        models.UsersBase.metadata.create_all(bind=database.fallback_engine)
+        
         try:
             from sqlalchemy import text
             with database.bot_engine.begin() as conn:
