@@ -35,16 +35,21 @@ from datetime import datetime, timedelta
 async def call_reminder_task():
     while True:
         try:
-            # Forzamos la hora a Colombia (UTC-5) asegurando que funcione en el servidor de Render
+            # Forzamos la hora a Colombia (UTC-5)
             now = datetime.utcnow() - timedelta(hours=5)
-            # We want calls whose appointment_time is between now and now + 5 min
             window_end = now + timedelta(minutes=5)
+
+            # Diagnostic: Log which DB we are using
+            try:
+                users_db = next(database.get_users_db())
+            except Exception as db_err:
+                print(f"CRITICAL: Could not even initialize DB session in task: {db_err}")
+                await asyncio.sleep(15)
+                continue
             
-            users_db = next(database.get_users_db())
             try:
                 from sqlalchemy import text
                 # We handle if full_name exists. Let's do the same fallback for safety if users.full_name doesn't exist.
-                # UPDATED: More robust window - check any pending for today up to now + 5 min
                 try:
                     sql = text("""
                         SELECT c.id, c.appointment_time, c.phone_number, c.person_name, u.phone_number as agent_phone, u.full_name as agent_name, s.name as study_name
@@ -73,11 +78,8 @@ async def call_reminder_task():
                 
                 for r in records:
                     call_id = r.id
-                        
-                    # Format message
                     agent_phone = r.agent_phone
                     if agent_phone:
-                        # Normalize
                         if not str(agent_phone).startswith("57"):
                             agent_phone = "57" + str(agent_phone)
                             
@@ -86,33 +88,70 @@ async def call_reminder_task():
                         
                         appt_time_str = r.appointment_time
                         if hasattr(r.appointment_time, 'strftime'):
-                            appt_time_str = r.appointment_time.strftime("%H:%M") # just the time is enough, it's today
+                            appt_time_str = r.appointment_time.strftime("%H:%M")
                             
-                        msg = f"🔔 *Recordatorio de Llamada*\nHola {agent_name}, soy un bot automatizado del CRM de AZ Marketing. A las {appt_time_str} tienes una llamada programada para el estudio *{study_name}*.\n\nDebes llamar al *{r.phone_number}* de la Sr(a) *{r.person_name}*."
+                        msg = f"🔔 *Recordatorio de Llamada*\nHola {agent_name}, hoy a las {appt_time_str} tienes una llamada programada para el estudio *{study_name}*.\nDebes llamar al *{r.phone_number}* de {r.person_name}."
                         
-                        # using existing send_whatsapp_message in main.py
                         try:
                             send_whatsapp_message(agent_phone, msg)
-                            print(f"Recordatorio de llamada enviado a {agent_phone} para llamada id {call_id}.")
-                            
-
-                            
                             # Update the calls table
-                            update_sql = text("UPDATE calls SET reminder_sent = 1 WHERE id = :call_id")
-                            users_db.execute(update_sql, {"call_id": call_id})
+                            sql_upd = text("UPDATE calls SET reminder_sent = 1 WHERE id = :cid")
+                            users_db.execute(sql_upd, {"cid": call_id})
                             users_db.commit()
-                        except Exception as e:
-                            print(f"Error enviando o guardando recordatorio a {agent_phone}: {e}")
-                            users_db.rollback()
-                                
+                            print(f"Recordatorio enviado a {agent_phone} para llamada {call_id}.")
+                        except Exception as send_err:
+                            print(f"Error enviando recordatorio: {send_err}")
+                
+            except Exception as task_err:
+                print(f"Error in call_reminder_task loop: {task_err}")
             finally:
                 users_db.close()
                 
-        except Exception as e:
-            print(f"Error in call_reminder_task: {e}")
-            
-        # Wait 60 seconds before checking again
-        await asyncio.sleep(60)
+            await asyncio.sleep(180) # Check every 3 minutes
+        except Exception as outer_err:
+            print(f"Outer error in call_reminder_task: {outer_err}")
+            await asyncio.sleep(20)
+
+@app.get("/api/diag")
+def diagnostic_check(db: Session = Depends(database.get_db)):
+    """
+    Diagnostic endpoint to verify database status from the browser.
+    """
+    res = {
+        "status": "online",
+        "timestamp": datetime.now().isoformat(),
+        "database": {
+            "bot_db": "unknown",
+            "users_db": "unknown"
+        }
+    }
+    
+    # Check Bot DB
+    try:
+        from sqlalchemy import text
+        db.execute(text("SELECT 1"))
+        res["database"]["bot_db"] = "connected (Bot SQLite/Postgres)"
+    except Exception as e:
+        res["database"]["bot_db"] = f"error: {str(e)}"
+        
+    # Check Users DB
+    try:
+        from sqlalchemy import text
+        u_db = next(database.get_users_db())
+        u_db.execute(text("SELECT 1"))
+        res["database"]["users_db"] = "connected (Users MySQL/Postgres/SQLite)"
+        u_db.close()
+    except Exception as e:
+        res["database"]["users_db"] = f"error: {str(e)}"
+        
+    # Environment info
+    res["env"] = {
+        "HAS_DATABASE_URL": bool(os.getenv("DATABASE_URL")),
+        "HAS_USERS_DATABASE_URL": bool(os.getenv("USERS_DATABASE_URL")),
+        "PLATFORM": "Render" if os.getenv("RENDER") else "Local"
+    }
+    
+    return res
 
 @app.on_event("startup")
 def on_startup():

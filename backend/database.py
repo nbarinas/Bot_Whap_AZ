@@ -21,36 +21,54 @@ if BOT_DB_URL.startswith("postgres://"):
 if BOT_DB_URL.startswith("mysql://"):
     BOT_DB_URL = BOT_DB_URL.replace("mysql://", "mysql+pymysql://", 1)
 
-bot_engine = create_engine(
-    BOT_DB_URL, 
-    pool_size=10, 
-    max_overflow=20,
-    pool_pre_ping=True,
-    connect_args={"check_same_thread": False} if "sqlite" in BOT_DB_URL else {},
-    pool_recycle=280 if "mysql" in BOT_DB_URL else -1 # Prevent "Gone away" for MySQL
-)
+bot_engine_args = {
+    "pool_size": 10,
+    "max_overflow": 20,
+    "pool_pre_ping": True,
+}
+
+# Add timeouts for MySQL/Postgres to avoid hanging
+if "mysql" in BOT_DB_URL:
+    bot_engine_args["pool_recycle"] = 280
+    bot_engine_args["connect_args"] = {"connect_timeout": 10}
+elif "postgresql" in BOT_DB_URL:
+    bot_engine_args["connect_args"] = {"connect_timeout": 10}
+elif "sqlite" in BOT_DB_URL:
+    bot_engine_args["connect_args"] = {"check_same_thread": False}
+
+bot_engine = create_engine(BOT_DB_URL, **bot_engine_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=bot_engine)
 Base = declarative_base()
 
 # 2. USERS DATABASE (Strictly Read-Only from Click Panda SQL or local testing AZ)
-# Flexibilidad: Aceptamos USERS_DATABASE_URL o simplemente DATABASE_URL (nombre por defecto en Render)
 USERS_DB_URL = os.getenv("USERS_DATABASE_URL") or os.getenv("DATABASE_URL") or f"sqlite:///{LOCAL_AZ_DB_PATH}"
 
-if USERS_DB_URL and USERS_DB_URL.startswith("postgres://"):
+if USERS_DB_URL.startswith("postgres://"):
     USERS_DB_URL = USERS_DB_URL.replace("postgres://", "postgresql://", 1)
-if USERS_DB_URL and USERS_DB_URL.startswith("mysql://"):
+if USERS_DB_URL.startswith("mysql://"):
     USERS_DB_URL = USERS_DB_URL.replace("mysql://", "mysql+pymysql://", 1)
 
-users_engine = create_engine(
-    USERS_DB_URL, 
-    pool_size=10, 
-    max_overflow=20,
-    pool_pre_ping=True,
-    connect_args={"check_same_thread": False} if "sqlite" in USERS_DB_URL else {},
-    pool_recycle=280 if "mysql" in USERS_DB_URL else -1
-)
+users_engine_args = {
+    "pool_size": 10,
+    "max_overflow": 20,
+    "pool_pre_ping": True,
+}
+
+if "mysql" in USERS_DB_URL:
+    users_engine_args["pool_recycle"] = 280
+    users_engine_args["connect_args"] = {"connect_timeout": 10}
+elif "postgresql" in USERS_DB_URL:
+    users_engine_args["connect_args"] = {"connect_timeout": 10}
+elif "sqlite" in USERS_DB_URL:
+    users_engine_args["connect_args"] = {"check_same_thread": False}
+
+users_engine = create_engine(USERS_DB_URL, **users_engine_args)
 UsersSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=users_engine)
 UsersBase = declarative_base()
+
+# Supplemental Engine for Failover (Always SQLite)
+fallback_engine = create_engine(f"sqlite:///{LOCAL_AZ_DB_PATH}", connect_args={"check_same_thread": False})
+FallbackSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=fallback_engine)
 
 def get_db():
     db = SessionLocal()
@@ -60,7 +78,20 @@ def get_db():
         db.close()
 
 def get_users_db():
-    db = UsersSessionLocal()
+    """
+    Tries to connect to the primary Users DB (MySQL/Postgres).
+    If it fails after 10s timeout, it falls back to the local SQLite file.
+    """
+    try:
+        # Test connection quickly
+        with users_engine.connect() as conn:
+            pass
+        db = UsersSessionLocal()
+        print(f"DEBUG: Using Primary DB ({USERS_DB_URL.split('@')[-1] if '@' in USERS_DB_URL else USERS_DB_URL})")
+    except Exception as e:
+        print(f"WARNING: Primary DB Unreachable ({e}). Falling back to local SQLite.")
+        db = FallbackSessionLocal()
+    
     try:
         yield db
     finally:
