@@ -155,29 +155,36 @@ def diagnostic_check(db: Session = Depends(database.get_db)):
 
 @app.on_event("startup")
 def on_startup():
-    models.Base.metadata.create_all(bind=database.bot_engine)
+    print("Application startup: initializing database engines...")
     try:
-        from sqlalchemy import text
-        with database.bot_engine.begin() as conn:
-            conn.execute(text("ALTER TABLE bot_quotas ADD COLUMN is_closed INTEGER DEFAULT 0"))
-    except Exception:
-        pass # Column presumably exists
+        # Bot's internal database (SQLite/Postgres) - Required for operation
+        models.Base.metadata.create_all(bind=database.bot_engine)
         
-    try:
-        from sqlalchemy import text
-        with database.bot_engine.begin() as conn:
-            conn.execute(text("ALTER TABLE bot_quotas ADD COLUMN point_type TEXT"))
-    except Exception:
-        pass
-        
-    try:
-        from sqlalchemy import text
-        with database.users_engine.begin() as conn:
-            conn.execute(text("ALTER TABLE calls ADD COLUMN reminder_sent INTEGER DEFAULT 0"))
-    except Exception:
-        pass
+        try:
+            from sqlalchemy import text
+            with database.bot_engine.begin() as conn:
+                conn.execute(text("ALTER TABLE bot_quotas ADD COLUMN is_closed INTEGER DEFAULT 0"))
+        except Exception:
+            pass # Column likely already exists
+            
+        try:
+            from sqlalchemy import text
+            with database.bot_engine.begin() as conn:
+                conn.execute(text("ALTER TABLE bot_quotas ADD COLUMN point_type TEXT"))
+        except Exception:
+            pass
+            
+        print("Bot database initialization complete.")
+    except Exception as e:
+        print(f"ERROR: Could not initialize Bot Database: {e}")
+        # We don't exit here to allow the app to provide a diagnostic response if possible
 
+    # NOTE: We REMOVED the 'ALTER TABLE calls' on the users_engine.
+    # The bot should be read-only on the CRM database to avoid startup crashes if it's slow or blocked.
+
+    # Start background tasks
     asyncio.create_task(call_reminder_task())
+    print("Startup sequence finished. Application is ready.")
 
 @app.get("/")
 def read_root():
