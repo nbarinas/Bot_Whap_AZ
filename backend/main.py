@@ -156,35 +156,34 @@ def diagnostic_check(db: Session = Depends(database.get_db)):
 @app.on_event("startup")
 def on_startup():
     print("Application startup: initializing database engines...")
+    
+    # 1. Initialize LOCAL Fallbacks first (No network required, very fast)
+    # This ensures "Contingency Mode" is ready even if MySQL is slow/down
     try:
-        # Bot's internal database (SQLite/Postgres) - Required for operation
-        models.Base.metadata.create_all(bind=database.bot_engine)
+        models.Base.metadata.create_all(bind=database.bot_fallback_engine)
+        models.UsersBase.metadata.create_all(bind=database.users_fallback_engine)
+        print("Fallback databases initialized and ready.")
+    except Exception as e:
+        print(f"CRITICAL: Could not initialize Fallback Databases: {e}")
+
+    # 2. Attempt to initialize Primary Engines (MySQL/Postgres)
+    try:
+        # Bot's internal database - only if it's NOT the same as fallback
+        if "sqlite" not in database.BOT_DB_URL:
+            models.Base.metadata.create_all(bind=database.bot_engine)
         
-        # Initialize Fallback Users DB (SQLite) - Required if Primary DB fails
-        # This prevents "no such table: users" errors in Contingency Mode
-        models.UsersBase.metadata.create_all(bind=database.fallback_engine)
-        
+        # Optional: Add columns if needed
         try:
             from sqlalchemy import text
             with database.bot_engine.begin() as conn:
                 conn.execute(text("ALTER TABLE bot_quotas ADD COLUMN is_closed INTEGER DEFAULT 0"))
-        except Exception:
-            pass # Column likely already exists
-            
-        try:
-            from sqlalchemy import text
-            with database.bot_engine.begin() as conn:
                 conn.execute(text("ALTER TABLE bot_quotas ADD COLUMN point_type TEXT"))
         except Exception:
-            pass
+            pass 
             
-        print("Bot database initialization complete.")
+        print("Primary database checks complete (or bypassed).")
     except Exception as e:
-        print(f"ERROR: Could not initialize Bot Database: {e}")
-        # We don't exit here to allow the app to provide a diagnostic response if possible
-
-    # NOTE: We REMOVED the 'ALTER TABLE calls' on the users_engine.
-    # The bot should be read-only on the CRM database to avoid startup crashes if it's slow or blocked.
+        print(f"INFO: Primary Database not reachable at startup ({e}). App will run in Contingency Mode.")
 
     # Start background tasks
     asyncio.create_task(call_reminder_task())

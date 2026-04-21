@@ -30,9 +30,9 @@ def get_engine_args(url):
     args = shared_engine_args.copy()
     if "mysql" in url:
         args["pool_recycle"] = 280
-        args["connect_args"] = {"connect_timeout": 10}
+        args["connect_args"] = {"connect_timeout": 30} # Increased to 30s
     elif "postgresql" in url:
-        args["connect_args"] = {"connect_timeout": 10}
+        args["connect_args"] = {"connect_timeout": 30}
     elif "sqlite" in url:
         args["connect_args"] = {"check_same_thread": False}
     return args
