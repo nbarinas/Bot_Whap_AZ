@@ -15,30 +15,35 @@ LOCAL_AZ_DB_PATH = SIBLING_AZ_DB if os.path.exists(SIBLING_AZ_DB) else ROOT_AZ_D
 # Defaults to a local sqlite file in the backend folder
 BOT_DB_URL = os.getenv("BOT_DATABASE_URL", f"sqlite:///{os.path.join(BASE_DIR, 'bot_data.db')}")
 
-# Fix for Render: SQLAlchemy expects postgresql:// but Render provides postgres://
 if BOT_DB_URL.startswith("postgres://"):
     BOT_DB_URL = BOT_DB_URL.replace("postgres://", "postgresql://", 1)
 if BOT_DB_URL.startswith("mysql://"):
     BOT_DB_URL = BOT_DB_URL.replace("mysql://", "mysql+pymysql://", 1)
 
-bot_engine_args = {
+shared_engine_args = {
     "pool_size": 10,
     "max_overflow": 20,
     "pool_pre_ping": True,
 }
 
-# Add timeouts for MySQL/Postgres to avoid hanging
-if "mysql" in BOT_DB_URL:
-    bot_engine_args["pool_recycle"] = 280
-    bot_engine_args["connect_args"] = {"connect_timeout": 10}
-elif "postgresql" in BOT_DB_URL:
-    bot_engine_args["connect_args"] = {"connect_timeout": 10}
-elif "sqlite" in BOT_DB_URL:
-    bot_engine_args["connect_args"] = {"check_same_thread": False}
+def get_engine_args(url):
+    args = shared_engine_args.copy()
+    if "mysql" in url:
+        args["pool_recycle"] = 280
+        args["connect_args"] = {"connect_timeout": 10}
+    elif "postgresql" in url:
+        args["connect_args"] = {"connect_timeout": 10}
+    elif "sqlite" in url:
+        args["connect_args"] = {"check_same_thread": False}
+    return args
 
-bot_engine = create_engine(BOT_DB_URL, **bot_engine_args)
+bot_engine = create_engine(BOT_DB_URL, **get_engine_args(BOT_DB_URL))
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=bot_engine)
 Base = declarative_base()
+
+# Bot Fallback Engine
+bot_fallback_engine = create_engine(f"sqlite:///{os.path.join(BASE_DIR, 'bot_data.db')}", connect_args={"check_same_thread": False})
+BotFallbackSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=bot_fallback_engine)
 
 # 2. USERS DATABASE (Strictly Read-Only from Click Panda SQL or local testing AZ)
 USERS_DB_URL = os.getenv("USERS_DATABASE_URL") or os.getenv("DATABASE_URL") or f"sqlite:///{LOCAL_AZ_DB_PATH}"
@@ -48,30 +53,31 @@ if USERS_DB_URL.startswith("postgres://"):
 if USERS_DB_URL.startswith("mysql://"):
     USERS_DB_URL = USERS_DB_URL.replace("mysql://", "mysql+pymysql://", 1)
 
-users_engine_args = {
-    "pool_size": 10,
-    "max_overflow": 20,
-    "pool_pre_ping": True,
-}
-
-if "mysql" in USERS_DB_URL:
-    users_engine_args["pool_recycle"] = 280
-    users_engine_args["connect_args"] = {"connect_timeout": 10}
-elif "postgresql" in USERS_DB_URL:
-    users_engine_args["connect_args"] = {"connect_timeout": 10}
-elif "sqlite" in USERS_DB_URL:
-    users_engine_args["connect_args"] = {"check_same_thread": False}
-
-users_engine = create_engine(USERS_DB_URL, **users_engine_args)
+users_engine = create_engine(USERS_DB_URL, **get_engine_args(USERS_DB_URL))
 UsersSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=users_engine)
 UsersBase = declarative_base()
 
-# Supplemental Engine for Failover (Always SQLite)
-fallback_engine = create_engine(f"sqlite:///{LOCAL_AZ_DB_PATH}", connect_args={"check_same_thread": False})
-FallbackSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=fallback_engine)
+# Users Fallback Engine
+users_fallback_engine = create_engine(f"sqlite:///{LOCAL_AZ_DB_PATH}", connect_args={"check_same_thread": False})
+UsersFallbackSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=users_fallback_engine)
 
 def get_db():
-    db = SessionLocal()
+    """
+    Tries to connect to the primary Bot DB.
+    Falls back to local SQLite if it fails.
+    """
+    db_type = "Primary"
+    try:
+        # Quick test for non-sqlite
+        if "sqlite" not in BOT_DB_URL:
+            with bot_engine.connect() as conn:
+                pass
+        db = SessionLocal()
+    except Exception as e:
+        print(f"WARNING: Bot Primary DB Unreachable ({e}). Initializing fallback.")
+        db = BotFallbackSessionLocal()
+        db_type = "Fallback"
+    
     try:
         yield db
     finally:
@@ -79,18 +85,20 @@ def get_db():
 
 def get_users_db():
     """
-    Tries to connect to the primary Users DB (MySQL/Postgres).
-    If it fails after 10s timeout, it falls back to the local SQLite file.
+    Tries to connect to the primary Users DB (from Environment).
+    Falls back to local SQLite if it fails.
     """
+    db_type = "Primary"
     try:
-        # Test connection quickly
-        with users_engine.connect() as conn:
-            pass
+        # Quick test for non-sqlite
+        if "sqlite" not in USERS_DB_URL:
+            with users_engine.connect() as conn:
+                pass
         db = UsersSessionLocal()
-        print(f"DEBUG: Using Primary DB ({USERS_DB_URL.split('@')[-1] if '@' in USERS_DB_URL else USERS_DB_URL})")
     except Exception as e:
-        print(f"WARNING: Primary DB Unreachable ({e}). Falling back to local SQLite.")
-        db = FallbackSessionLocal()
+        print(f"WARNING: Users Primary DB Unreachable ({e}). Initializing fallback.")
+        db = UsersFallbackSessionLocal()
+        db_type = "Fallback"
     
     try:
         yield db
