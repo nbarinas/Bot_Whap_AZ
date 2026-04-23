@@ -18,7 +18,7 @@ data = {
     "template": {
         "name": "recordatorio_de_llamada",
         "language": {
-            "code": "es_CO"
+            "code": "en"
         },
         "components": [
             {

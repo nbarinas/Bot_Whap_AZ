@@ -544,14 +544,15 @@ async function saveBatchQuotas() {
     } catch (e) { console.error(e); }
 }
 
-async function deleteStudyGlobal(studyCode) {
-    if (!confirm(`¿Estás completamente seguro de ELIMINAR todo el estudio ${studyCode}?`)) return;
+async function deleteStudyGlobal(studyId, studyName) {
+    if (!confirm(`¿Estás completamente seguro de ELIMINAR todo el estudio ${studyName}?`)) return;
     try {
-        const res = await fetchWithAuth(`/api/quotas/study/${studyCode}`, { method: 'DELETE' });
+        const res = await fetchWithAuth(`/api/quotas/study/${encodeURIComponent(studyName)}`, { method: 'DELETE' });
         if (res.ok) loadQuotas();
         else alert("Error al eliminar el estudio");
     } catch (e) {
         console.error(e);
+        alert("Error de conexión al intentar eliminar el estudio");
     }
 }
 
@@ -724,17 +725,16 @@ function editStudy(studyId, studyCode) {
     }
 }
 
-async function exportStudyData(studyCode) {
+async function exportStudyData(studyId, studyName) {
     try {
-        const token = localStorage.getItem('token');
-        const response = await fetch(`/api/export-data/${studyCode}`);
+        const response = await fetch(`/api/export-data/${encodeURIComponent(studyName)}`);
         if (!response.ok) throw new Error("Error al descargar");
         
         const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `data_${studyCode}.csv`;
+        a.download = `data_${studyName}.csv`;
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -801,12 +801,16 @@ async function simulateWebhook() {
     }
 }
 
-async function toggleStudyStatus(studyCode) {
-    if (!confirm(`¿Deseas cambiar el estado (Abrir/Cerrar) del estudio ${studyCode}?`)) return;
+async function toggleStudyStatus(studyId, studyName) {
+    if (!confirm(`¿Deseas cambiar el estado (Abrir/Cerrar) del estudio ${studyName}?`)) return;
     try {
-        const res = await fetchWithAuth(`/api/quotas/study/${studyCode}/toggle-status`, { method: 'PUT' });
+        const res = await fetchWithAuth(`/api/quotas/study/${encodeURIComponent(studyName)}/toggle-status`, { method: 'PUT' });
         if (res.ok) loadQuotas();
-    } catch (e) { console.error(e); }
+        else alert("Error al cambiar el estado del estudio");
+    } catch (e) { 
+        console.error(e); 
+        alert("Error de conexión al intentar cambiar el estado");
+    }
 }
 
 function openAgentsModal() {
