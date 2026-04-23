@@ -432,12 +432,15 @@ def delete_quota(quota_id: int, db: Session = Depends(database.get_db), current_
 
 @app.delete("/api/quotas/study/{study_code}")
 def delete_study(study_code: str, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
-    quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
-    if not quotas:
-        raise HTTPException(status_code=404, detail="Study not found")
-        
-    for q in quotas:
-        db.delete(q)
+    # Eliminar cuotas
+    db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).delete()
+    
+    # Eliminar registro maestro del estudio
+    db.query(models.BotStudy).filter(models.BotStudy.name == study_code).delete()
+    
+    # Eliminar suscripciones de agentes a este estudio
+    db.query(models.BotStudySubscription).filter(models.BotStudySubscription.study_code == study_code).delete()
+    
     db.commit()
     return {"msg": "Study deleted"}
 
@@ -531,13 +534,21 @@ def export_study_data(study_code: str, db: Session = Depends(database.get_db)):
 
 @app.put("/api/quotas/study/{study_code}/toggle-status")
 def toggle_study_status(study_code: str, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
+    # Buscamos las cuotas para este estudio
     quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
     if not quotas:
         raise HTTPException(status_code=404, detail="Study not found")
         
+    # Alternamos el estado
     new_status = 1 if quotas[0].is_closed == 0 else 0
     for q in quotas:
         q.is_closed = new_status
+        
+    # También actualizamos la tabla maestra de estudios para mantener la consistencia
+    study = db.query(models.BotStudy).filter(models.BotStudy.name == study_code).first()
+    if study:
+        study.is_closed = (new_status == 1)
+        
     db.commit()
     return {"msg": f"Study {'closed' if new_status else 'opened'}", "is_closed": new_status}
 
@@ -592,7 +603,7 @@ import requests
 from sqlalchemy import text
 
 # WhatsApp Configuration Constants (Use environment variables in production)
-WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "EAAXs5LUMDHoBQ3gidC32OLGzDEZC4uhZCAWI0WNVvk8nnKg4ewiYo4a0pQi9qhjhXwAZC94UoSg6BsPQzFqjPIYiTu6rQqkhqihEbIG5zfKTpqN3tcrce9dUR4UOCYR7qKYov3IILAcUcQUJjuAIZBZBo5koizRGSI7vBUkmD8nV2aK8xqwLAfoCR3MWWvAG6sF5GfInh5sBdQz6nPsR9fowIYhkKK3f8r80r5GJHTlSohpiWwEZB7rowThW38oH3PANfXZANosc8sFhZBwYKAaCZAR719T0ZA9rUZD")
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "EAAXs5LUMDHoBQ052ePZAxW647UmCHi8OEdfACZABBXDKcITJiCow61lHT7njd1jI5ZALx73JNz2JDrpNUzISjHxZBZBny7Tm2LHfLdL72KmYGkZCs3oOSXftcUxazKFHt2z4IrRFko9oWXorQbhwaLHoUkBlIgmSVkCF4LhPDbSV3fnwK3EwfZCqLpbfZB62jwZDZD")
 WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID", "969902462880750")
 WHATSAPP_VERIFY_TOKEN = os.getenv("WHATS_VERIFY_TOKEN", "azbot_secreto_2026")
 
