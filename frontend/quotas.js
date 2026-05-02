@@ -804,7 +804,7 @@ async function simulateWebhook() {
 async function toggleStudyStatus(studyId, studyName) {
     if (!confirm(`¿Deseas cambiar el estado (Abrir/Cerrar) del estudio ${studyName}?`)) return;
     try {
-        const res = await fetchWithAuth(`/api/quotas/study/${encodeURIComponent(studyName)}/toggle-status`, { method: 'PUT' });
+        const res = await fetchWithAuth(`/api/quotas/study/${studyId}/toggle-status`, { method: 'PUT' });
         if (res.ok) loadQuotas();
         else alert("Error al cambiar el estado del estudio");
     } catch (e) { 

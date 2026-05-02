@@ -535,7 +535,11 @@ def export_study_data(study_code: str, db: Session = Depends(database.get_db)):
 @app.put("/api/quotas/study/{study_code}/toggle-status")
 def toggle_study_status(study_code: str, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
     # Buscamos las cuotas para este estudio
-    quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
+    if study_code.isdigit():
+        quotas = db.query(models.BotQuota).filter(models.BotQuota.study_id == int(study_code)).all()
+    else:
+        quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
+        
     if not quotas:
         raise HTTPException(status_code=404, detail="Study not found")
         
@@ -545,9 +549,11 @@ def toggle_study_status(study_code: str, db: Session = Depends(database.get_db),
         q.is_closed = new_status
         
     # También actualizamos la tabla maestra de estudios para mantener la consistencia
-    study = db.query(models.BotStudy).filter(models.BotStudy.name == study_code).first()
-    if study:
-        study.is_closed = (new_status == 1)
+    study_id = quotas[0].study_id
+    if study_id:
+        study = db.query(models.BotStudy).filter(models.BotStudy.id == study_id).first()
+        if study:
+            study.is_closed = (new_status == 1)
         
     db.commit()
     return {"msg": f"Study {'closed' if new_status else 'opened'}", "is_closed": new_status}
