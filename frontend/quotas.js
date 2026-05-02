@@ -464,6 +464,9 @@ function openModal() {
     document.getElementById('studyCode').value = '';
     document.getElementById('totalSurveys').value = '';
     document.getElementById('studyCode').readOnly = false;
+    
+    const idHidden = document.getElementById('studyIdHidden');
+    if (idHidden) idHidden.value = '';
 
     document.querySelectorAll('.category-toggles input[type="checkbox"]').forEach(cb => cb.checked = false);
 
