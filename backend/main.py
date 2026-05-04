@@ -2220,6 +2220,8 @@ def check_free_text_quota(db, study_code: str, msg: str):
         is_pt = (q.category == "Tipo de Punto")
         if q.category == "General" and not q.value.startswith("Censos"):
              parts = [q.value.lower().strip()]
+        elif is_pt:
+             parts = [q.value.lower().strip()]
         else:
              cat_part = q.category if q.category else ""
              parts = [x.strip().lower() for x in cat_part.split("|") if x.strip()] + [q.value.lower().strip()]
