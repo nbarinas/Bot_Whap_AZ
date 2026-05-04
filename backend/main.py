@@ -2248,12 +2248,10 @@ def check_free_text_quota(db, study_code: str, msg: str):
             
     def get_best_obj(matches):
         if not matches: return None
-        matches.sort(key=lambda x: x["score"], reverse=True)
-        top = [m for m in matches if m["score"] == matches[0]["score"]]
-        perfect = [m for m in top if len(m["parts"]) == m["score"]]
+        # Solo consideramos un match si TODAS las partes de la categoría fueron encontradas
+        perfect = [m for m in matches if len(m["parts"]) == m["score"]]
         if perfect: return perfect[0]
-        top.sort(key=lambda x: len(x["parts"]))
-        return top[0]
+        return None
 
     std_obj = get_best_obj(standard_matches)
     pt_obj = get_best_obj(point_matches)
@@ -2262,11 +2260,19 @@ def check_free_text_quota(db, study_code: str, msg: str):
     pt_best = pt_obj["quota"] if pt_obj else None
 
     has_pt_quotas = any(q.category == "Tipo de Punto" for q in quotas)
-    if has_pt_quotas:
-        if std_best and not pt_best:
-            return [], "", "⚠️ Has indicado la cuota demográfica, pero falta el punto (ej: parque, cc, iglesia, etc.)."
-        if pt_best and not std_best:
-            return [], "", "⚠️ Has indicado el punto, pero falta la cuota demográfica (ej: hombre 25)."
+    has_std_quotas = any(q.category != "Tipo de Punto" and not q.value.startswith("Censos") for q in quotas)
+
+    if has_std_quotas and not std_best:
+        if standard_matches:
+            return [], "", "⚠️ Cuota demográfica incompleta o incorrecta. Por favor asegúrate de incluir todos los datos requeridos (ej: género, edad y zona si aplica)."
+        else:
+            return [], "", "⚠️ Falta la cuota demográfica (ej: hombre 25 norte)."
+            
+    if has_pt_quotas and not pt_best:
+        if point_matches:
+             return [], "", "⚠️ Tipo de punto incorrecto o incompleto. Asegúrate de escribir el punto válido (ej: parque, cc, iglesia)."
+        else:
+             return [], "", "⚠️ Falta el tipo de punto (ej: parque, cc, iglesia)."
 
     results = []
     used_indices = set()
