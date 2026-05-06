@@ -52,6 +52,7 @@ class BotQuota(Base):
 class BotActiveAgent(Base):
     __tablename__ = "bot_active_agents"
     phone_number = Column(String(50), primary_key=True)
+    assigned_studies = Column(String(500), nullable=True)
 
 class BotReferral(Base):
     __tablename__ = "bot_referrals"

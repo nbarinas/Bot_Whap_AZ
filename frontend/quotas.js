@@ -839,14 +839,19 @@ async function loadAgents() {
         }
         
         let html = '<table style="width:100%; border-collapse:collapse; text-align:left;">';
-        html += '<tr style="border-bottom:2px solid var(--border-color);"><th>Teléfono</th><th>Nombre / Rol</th><th style="text-align:center;">Acceso al Bot</th></tr>';
+        html += '<tr style="border-bottom:2px solid var(--border-color);"><th>Teléfono</th><th>Nombre / Rol</th><th>Estudios Permitidos (ej: R1,R2)</th><th style="text-align:center;">Activo</th></tr>';
         
         agents.forEach(a => {
             const isChecked = a.is_active ? 'checked' : '';
+            const studies = a.assigned_studies || '';
             html += `
                 <tr style="border-bottom:1px solid var(--border-color);">
                     <td style="padding:10px 0; font-weight:bold;">${a.phone_number}</td>
                     <td style="padding:10px 0; color:var(--text-main); font-weight:600;">${a.full_name ? a.full_name : a.username} <br><small style="color:var(--text-muted); font-weight:normal;">Usr: ${a.username} (${a.role})</small></td>
+                    <td style="padding:10px 0;">
+                        <input type="text" id="studies_${a.phone_number}" value="${studies}" placeholder="Todos (vacío)" style="width:150px; padding:6px; border:1px solid #ccc; border-radius:4px;">
+                        <button onclick="saveAgentStudies('${a.phone_number}')" style="padding:6px 10px; margin-left:4px; font-size:0.8rem; border-radius:4px; background:var(--primary); color:white; border:none; cursor:pointer;">Guardar</button>
+                    </td>
                     <td style="padding:10px 0; text-align:center;">
                         <label style="cursor:pointer;">
                             <input type="checkbox" onchange="toggleAgentStatus('${a.phone_number}', this.checked)" ${isChecked} style="transform: scale(1.5);">
@@ -875,6 +880,25 @@ async function toggleAgentStatus(phone, isActive) {
     } catch (e) {
         console.error(e);
         alert("Error cambiando el acceso del encuestador.");
+    }
+}
+
+async function saveAgentStudies(phone) {
+    const studies = document.getElementById('studies_' + phone).value.trim();
+    try {
+        const res = await fetchWithAuth('/api/agents/assign', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone_number: phone, assigned_studies: studies })
+        });
+        if (res.ok) {
+            alert('Estudios guardados correctamente.');
+        } else {
+            alert('Error al asignar estudios.');
+        }
+    } catch (e) {
+        console.error(e);
+        alert('Error de conexión.');
     }
 }
 

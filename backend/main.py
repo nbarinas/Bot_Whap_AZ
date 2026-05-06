@@ -569,17 +569,19 @@ def get_agents(db: Session = Depends(database.get_db), db_users: Session = Depen
         all_users = db_users.execute(sql).fetchall()
         
     active_records = db.query(models.BotActiveAgent).all()
-    active_phones = {record.phone_number for record in active_records}
+    active_map = {record.phone_number: record.assigned_studies for record in active_records}
     
     agents = []
     for u in all_users:
         if u.phone_number:
+            is_active = u.phone_number in active_map
             agents.append({
                 "username": u.username,
                 "full_name": u.full_name if u.full_name else u.username,
                 "phone_number": u.phone_number,
                 "role": u.role,
-                "is_active": u.phone_number in active_phones
+                "is_active": is_active,
+                "assigned_studies": active_map[u.phone_number] if is_active else None
             })
     return agents
 
@@ -598,6 +600,19 @@ def toggle_agent(req: AgentToggleRequest, db: Session = Depends(database.get_db)
         
     db.commit()
     return {"msg": "Agent status updated"}
+
+class AgentAssignRequest(BaseModel):
+    phone_number: str
+    assigned_studies: str
+
+@app.post("/api/agents/assign")
+def assign_agent_studies(req: AgentAssignRequest, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
+    record = db.query(models.BotActiveAgent).filter(models.BotActiveAgent.phone_number == req.phone_number).first()
+    if record:
+        record.assigned_studies = req.assigned_studies
+        db.commit()
+        return {"msg": "Agent assignments updated"}
+    return {"msg": "Agent not active"}
 
 class WebhookSimulateRequest(BaseModel):
     phone_number: str
@@ -1105,8 +1120,16 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             elif user_type == "AGENT":
                 # Ask for study
                 studies = db.query(models.BotQuota.study_code).filter(models.BotQuota.is_closed == 0).distinct().all()
-                if not studies:
-                    reply = timeout_message + "No hay estudios activos en este momento."
+                study_list_all = [s[0] for s in studies]
+                
+                # Filter by assigned studies
+                study_list = study_list_all
+                if is_active and active_agent and active_agent.assigned_studies:
+                    allowed = [s.strip().lower() for s in active_agent.assigned_studies.split(',') if s.strip()]
+                    study_list = [s for s in study_list_all if s.lower() in allowed]
+                
+                if not study_list:
+                    reply = timeout_message + "No hay estudios activos asignados en este momento."
                     ctx["available_studies"] = []
                     ctx["validate_option_idx"] = 1
                     session.state = "WAITING_STUDY"
@@ -1121,7 +1144,6 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     }
                     ctx["interactive_fallback"] = interactive_data
                 else:
-                    study_list = [s[0] for s in studies]
                     ctx["available_studies"] = study_list
                     ctx["invalid_attempts"] = 0
                     session.state = "WAITING_STUDY"
@@ -2177,7 +2199,9 @@ POINT_TYPE_ALIASES = {
     "parque": ["parque"],
     "plaza/plazoleta": ["plaza", "plazoleta"],
     "zona comercial": ["zona"],
-    "colegio/universidad": ["colegio", "universidad", "cole", "u", "uni"]
+    "colegio/universidad": ["colegio", "universidad", "cole", "u", "uni"],
+    "hospital": ["hospital", "hosp", "hospi", "clinica", "clínica"],
+    "estación de transporte": ["estacion", "estación", "transporte", "portal", "terminal", "paradero"]
 }
 
 def check_free_text_quota(db, study_code: str, msg: str):
