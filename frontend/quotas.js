@@ -869,7 +869,7 @@ async function loadAgents() {
                     <td style="padding:10px 0; color:var(--text-main); font-weight:600;">${a.full_name ? a.full_name : a.username} <br><small style="color:var(--text-muted); font-weight:normal;">Usr: ${a.username} (${a.role})</small></td>
                     <td style="padding:10px 0; max-width:200px;">
                         ${checkboxesHtml}
-                        <button onclick="saveAgentStudiesCB('${a.phone_number}')" style="padding:4px 8px; font-size:0.75rem; border-radius:4px; background:var(--primary); color:white; border:none; cursor:pointer;">Guardar Estudios</button>
+                        <button onclick="saveAgentStudiesCB('${a.phone_number}')" style="padding:4px 8px; font-size:0.75rem; border-radius:4px; background:var(--primary-color); color:white; border:none; cursor:pointer; width:100%; margin-top:2px;">Guardar Estudios</button>
                     </td>
                     <td style="padding:10px 0; text-align:center;">
                         <label style="cursor:pointer;">
