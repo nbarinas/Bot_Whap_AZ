@@ -614,6 +614,11 @@ def assign_agent_studies(req: AgentAssignRequest, db: Session = Depends(database
         return {"msg": "Agent assignments updated"}
     return {"msg": "Agent not active"}
 
+@app.get("/api/studies/active")
+def get_active_studies(db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
+    studies = db.query(models.BotQuota.study_code).filter(models.BotQuota.is_closed == 0).distinct().all()
+    return {"active_studies": [s[0] for s in studies]}
+
 class WebhookSimulateRequest(BaseModel):
     phone_number: str
     message: str

@@ -829,9 +829,16 @@ async function loadAgents() {
     const container = document.getElementById('agentsListContainer');
     container.innerHTML = '<p style="text-align:center;">Cargando...</p>';
     try {
-        const res = await fetchWithAuth('/api/agents');
-        if (!res.ok) { container.innerHTML = '<p>Error cargando encuestadores.</p>'; return; }
-        const agents = await res.json();
+        const [resAgents, resStudies] = await Promise.all([
+            fetchWithAuth('/api/agents'),
+            fetchWithAuth('/api/studies/active')
+        ]);
+        
+        if (!resAgents.ok) { container.innerHTML = '<p>Error cargando encuestadores.</p>'; return; }
+        
+        const agents = await resAgents.json();
+        const studiesData = resStudies.ok ? await resStudies.json() : { active_studies: [] };
+        const activeStudies = studiesData.active_studies || [];
         
         if (agents.length === 0) {
             container.innerHTML = '<p style="text-align:center;">No hay usuarios en la base de datos.</p>';
@@ -839,18 +846,30 @@ async function loadAgents() {
         }
         
         let html = '<table style="width:100%; border-collapse:collapse; text-align:left;">';
-        html += '<tr style="border-bottom:2px solid var(--border-color);"><th>Teléfono</th><th>Nombre / Rol</th><th>Estudios Permitidos (ej: R1,R2)</th><th style="text-align:center;">Activo</th></tr>';
+        html += '<tr style="border-bottom:2px solid var(--border-color);"><th>Teléfono</th><th>Nombre / Rol</th><th>Estudios Permitidos</th><th style="text-align:center;">Activo</th></tr>';
         
         agents.forEach(a => {
             const isChecked = a.is_active ? 'checked' : '';
-            const studies = a.assigned_studies || '';
+            const assignedArray = a.assigned_studies ? a.assigned_studies.split(',').map(s => s.trim().toLowerCase()) : [];
+            
+            let checkboxesHtml = '<div style="max-height:80px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:4px; padding:4px; font-size:0.8rem; background:#f8fafc; margin-bottom:4px;">';
+            if (activeStudies.length === 0) {
+                checkboxesHtml += '<div style="color:#94a3b8; font-style:italic;">No hay estudios activos</div>';
+            } else {
+                activeStudies.forEach(study => {
+                    const checked = assignedArray.includes(study.toLowerCase()) ? 'checked' : '';
+                    checkboxesHtml += `<label style="display:block; cursor:pointer; margin-bottom:2px;"><input type="checkbox" class="study-cb-${a.phone_number}" value="${study}" ${checked}> ${study}</label>`;
+                });
+            }
+            checkboxesHtml += '</div>';
+
             html += `
                 <tr style="border-bottom:1px solid var(--border-color);">
                     <td style="padding:10px 0; font-weight:bold;">${a.phone_number}</td>
                     <td style="padding:10px 0; color:var(--text-main); font-weight:600;">${a.full_name ? a.full_name : a.username} <br><small style="color:var(--text-muted); font-weight:normal;">Usr: ${a.username} (${a.role})</small></td>
-                    <td style="padding:10px 0;">
-                        <input type="text" id="studies_${a.phone_number}" value="${studies}" placeholder="Todos (vacío)" style="width:150px; padding:6px; border:1px solid #ccc; border-radius:4px;">
-                        <button onclick="saveAgentStudies('${a.phone_number}')" style="padding:6px 10px; margin-left:4px; font-size:0.8rem; border-radius:4px; background:var(--primary); color:white; border:none; cursor:pointer;">Guardar</button>
+                    <td style="padding:10px 0; max-width:200px;">
+                        ${checkboxesHtml}
+                        <button onclick="saveAgentStudiesCB('${a.phone_number}')" style="padding:4px 8px; font-size:0.75rem; border-radius:4px; background:var(--primary); color:white; border:none; cursor:pointer;">Guardar Estudios</button>
                     </td>
                     <td style="padding:10px 0; text-align:center;">
                         <label style="cursor:pointer;">
@@ -883,13 +902,15 @@ async function toggleAgentStatus(phone, isActive) {
     }
 }
 
-async function saveAgentStudies(phone) {
-    const studies = document.getElementById('studies_' + phone).value.trim();
+async function saveAgentStudiesCB(phone) {
+    const checkboxes = document.querySelectorAll('.study-cb-' + phone + ':checked');
+    const selected = Array.from(checkboxes).map(cb => cb.value).join(',');
+    
     try {
         const res = await fetchWithAuth('/api/agents/assign', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ phone_number: phone, assigned_studies: studies })
+            body: JSON.stringify({ phone_number: phone, assigned_studies: selected })
         });
         if (res.ok) {
             alert('Estudios guardados correctamente.');
