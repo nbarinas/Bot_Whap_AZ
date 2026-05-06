@@ -612,7 +612,7 @@ def assign_agent_studies(req: AgentAssignRequest, db: Session = Depends(database
         record.assigned_studies = req.assigned_studies
         db.commit()
         return {"msg": "Agent assignments updated"}
-    return {"msg": "Agent not active"}
+    raise HTTPException(status_code=400, detail="Debes marcar la casilla 'Activo' del encuestador primero.")
 
 @app.get("/api/studies/active")
 def get_active_studies(db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):

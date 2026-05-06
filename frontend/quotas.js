@@ -915,7 +915,8 @@ async function saveAgentStudiesCB(phone) {
         if (res.ok) {
             alert('Estudios guardados correctamente.');
         } else {
-            alert('Error al asignar estudios.');
+            const errData = await res.json().catch(() => ({}));
+            alert(errData.detail || 'Error al asignar estudios.');
         }
     } catch (e) {
         console.error(e);
