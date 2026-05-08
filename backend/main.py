@@ -2253,7 +2253,7 @@ def check_free_text_quota(db, study_code: str, msg: str):
              parts = [q.value.lower().strip()]
         else:
              cat_part = q.category if q.category else ""
-             parts = [x.strip().lower() for x in cat_part.split("|") if x.strip()] + [q.value.lower().strip()]
+             parts = [x.strip().lower() for x in cat_part.split("|") if x.strip() and x.strip().lower() not in ["región", "region"]] + [q.value.lower().strip()]
             
         score = 0
         matched_indices = set()
