@@ -1457,7 +1457,10 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                                 q_label = f"{quota.category} | {quota.value}" if (quota.category and quota.category != "General") else quota.value
                                 reply = f"❌ La cuota *{q_label}* ya está llena ({quota.current_count}/{quota.target_count}).\n\nSi realmente necesitas agregarla, por favor escribe a Armando."
                                 session.state = "IDLE"
-                                session.context_data = json.dumps({})
+                                # Limpiar flags temporales pero mantener el resto del contexto (como study_code)
+                                ctx.pop("is_overquota_allowed", None)
+                                ctx.pop("free_text_quota_ids", None)
+                                session.context_data = json.dumps(ctx)
                                 return reply, None, {}
 
                             sub = models.QuotaSubmission(

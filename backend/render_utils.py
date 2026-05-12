@@ -255,7 +255,7 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
                     
                     # Highlighting (Always compare current vs target regardless of what is displayed)
                     if d['current'] > d['target']: is_ex, cell_bg = True, EXCEEDED_BG
-                    elif d['current'] == d['target'] and d['target'] > 0: is_hl, cell_bg = True, HIGHLIGHT_BG
+                    elif d['current'] == d['target']: is_hl, cell_bg = True, HIGHLIGHT_BG
                 
                 # Only highlight progress table (current), goal table stays clean? 
                 # User said "colores... forma es lo que quiero cambiar", but mockup showed colors in pending.
@@ -274,6 +274,7 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
             elif display_mode == 'current': rt_str = str(rt['current'])
             else: rt_str = f"{rt['current']}/{rt['target']}"
             
+            # Subtotales: Amarillo si lleno (solo si el objetivo > 0)
             is_hl = rt['current'] == rt['target'] and rt['target'] > 0 and not rt['any_exceeded']
             is_ex = rt['current'] > rt['target']
             
@@ -298,6 +299,7 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
             elif display_mode == 'current': ct_str = str(ct['current'])
             else: ct_str = f"{ct['current']}/{ct['target']}"
             
+            # Subtotales: Amarillo si lleno (solo si el objetivo > 0)
             is_hl = ct['current'] == ct['target'] and ct['target'] > 0 and not ct['any_exceeded']
             is_ex = ct['current'] > ct['target']
             
@@ -314,7 +316,8 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
         elif display_mode == 'current': gt_str = str(gt['current'])
         else: gt_str = f"{gt['current']}/{gt['target']}"
         
-        is_hl = gt['current'] == gt['target'] and gt['target'] > 0 and not gt['any_exceeded']
+        # Total General (100/100 o 0/0): Amarillo si lleno
+        is_hl = gt['current'] == gt['target'] and not gt['any_exceeded']
         is_ex = gt['current'] > gt['target']
         bg_gt = EXCEEDED_BG if is_ex else (SUBTOTAL_BG if is_hl else CELL_BG_ALT)
         draw.rectangle([cx, curr_y, cx + col_w[-1], curr_y + row_h], fill=bg_gt, outline=BORDER_COLOR)
