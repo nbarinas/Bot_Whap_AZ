@@ -1104,8 +1104,11 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         return full_reply, interactive_fallback, ctx
 
     if not is_media_unsupported:
+        # Normalizar mensaje para lógica de control
+        msg = msg.lower().strip()
+        
         # Detectar palabra "sobrecuota" (case-insensitive)
-        is_overquota_detected = "sobrecuota" in msg.lower()
+        is_overquota_detected = "sobrecuota" in msg
         if is_overquota_detected:
             ctx["is_overquota_allowed"] = True
             msg = re.sub(r'sobrecuota', '', msg, flags=re.IGNORECASE).strip()
