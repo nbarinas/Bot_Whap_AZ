@@ -1461,6 +1461,8 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                                 ctx.pop("is_overquota_allowed", None)
                                 ctx.pop("free_text_quota_ids", None)
                                 session.context_data = json.dumps(ctx)
+                                db.commit()
+                                send_whatsapp_message(phone, reply)
                                 return reply, None
 
                             sub = models.QuotaSubmission(
