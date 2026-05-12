@@ -186,7 +186,6 @@ def on_startup():
         print(f"INFO: Primary Database not reachable at startup ({e}). App will run in Contingency Mode.")
 
     # Start background tasks
-    asyncio.create_task(call_reminder_task())
     print("Startup sequence finished. Application is ready.")
 
 @app.get("/")
@@ -1453,7 +1452,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                             # Validar si la cuota ya está llena
                             if quota.current_count >= quota.target_count and not ctx.get("is_overquota_allowed"):
                                 q_label = f"{quota.category} | {quota.value}" if (quota.category and quota.category != "General") else quota.value
-                                reply = f"❌ La cuota *{q_label}* ya está llena ({quota.current_count}/{quota.target_count}).\n\nSi realmente necesitas agregarla, por favor escribe 'sobrecuota' seguido de los datos."
+                                reply = f"❌ La cuota *{q_label}* ya está llena ({quota.current_count}/{quota.target_count}).\n\nSi realmente necesitas agregarla, por favor escribe a Armando."
                                 session.state = "IDLE"
                                 session.context_data = json.dumps({})
                                 return reply, None, {}
@@ -2420,7 +2419,7 @@ def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tupl
             # Validar si la cuota ya está llena
             if q.current_count >= q.target_count and not ctx.get("is_overquota_allowed"):
                 q_label = f"{q.category} | {q.value}" if (q.category and q.category != "General") else q.value
-                return f"❌ La cuota *{q_label}* ya está llena ({q.current_count}/{q.target_count}).\n\nSi deseas agregar una sobrecuota, inicia de nuevo escribiendo la palabra 'sobrecuota' al principio.", "IDLE", None
+                return f"❌ La cuota *{q_label}* ya está llena ({q.current_count}/{q.target_count}).\n\nSi realmente necesitas agregarla, por favor escribe a Armando.", "IDLE", None
 
             sub = models.QuotaSubmission(
                 bot_quota_id=q.id,

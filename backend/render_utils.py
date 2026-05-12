@@ -24,10 +24,10 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
     HEADER_TEXT = (255, 255, 255)
     CELL_BG = (255, 255, 255)
     CELL_BG_ALT = (248, 249, 252) 
-    HIGHLIGHT_BG = (255, 230, 100) # Yellow for filled
-    HIGHLIGHT_TEXT = (0, 0, 0)      # Black text on yellow
-    SUBTOTAL_BG = (0, 0, 0)        # Black background for subtotals
-    SUBTOTAL_TEXT = (0, 0, 0)      # Black text for subtotals (invisible)
+    HIGHLIGHT_BG = (0, 0, 0)        # Black for filled normal cells
+    HIGHLIGHT_TEXT = (0, 0, 0)      # Invisible text for filled normal cells
+    SUBTOTAL_BG = (255, 230, 100)  # Yellow for subtotal cells
+    SUBTOTAL_TEXT = (0, 0, 0)      # Black text on yellow subtotals
     EXCEEDED_BG = (255, 100, 100)  # Stronger Red for exceeded
     EXCEEDED_TEXT = (255, 255, 255) # White text on strong red
     BORDER_COLOR = (218, 220, 224)
@@ -316,10 +316,10 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
         
         is_hl = gt['current'] == gt['target'] and gt['target'] > 0 and not gt['any_exceeded']
         is_ex = gt['current'] > gt['target']
-        bg_gt = EXCEEDED_BG if is_ex else (HIGHLIGHT_BG if is_hl else CELL_BG_ALT)
+        bg_gt = EXCEEDED_BG if is_ex else (SUBTOTAL_BG if is_hl else CELL_BG_ALT)
         draw.rectangle([cx, curr_y, cx + col_w[-1], curr_y + row_h], fill=bg_gt, outline=BORDER_COLOR)
         tw, th = get_text_size(gt_str, bold_font)
-        color = EXCEEDED_TEXT if is_ex else (HIGHLIGHT_TEXT if is_hl else TEXT_COLOR)
+        color = EXCEEDED_TEXT if is_ex else (SUBTOTAL_TEXT if is_hl else TEXT_COLOR)
         draw.text((cx + (col_w[-1]-tw)//2, curr_y + (row_h-th)//2), gt_str, fill=color, font=bold_font)
         
         curr_y += row_h + 30 # Spacer between sections
