@@ -25,7 +25,9 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
     CELL_BG = (255, 255, 255)
     CELL_BG_ALT = (248, 249, 252) 
     HIGHLIGHT_BG = (255, 230, 100) # Yellow for filled
-    HIGHLIGHT_TEXT = (100, 80, 0)   
+    HIGHLIGHT_TEXT = (0, 0, 0)      # Black text on yellow
+    SUBTOTAL_BG = (0, 0, 0)        # Black background for subtotals
+    SUBTOTAL_TEXT = (0, 0, 0)      # Black text for subtotals (invisible)
     EXCEEDED_BG = (255, 100, 100)  # Stronger Red for exceeded
     EXCEEDED_TEXT = (255, 255, 255) # White text on strong red
     BORDER_COLOR = (218, 220, 224)
@@ -266,7 +268,7 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
                     draw.text((cx + (cw - tw)//2, curr_y + (row_h - th)//2), val_str, fill=color, font=bold_font if (is_hl or is_ex) else font)
                 cx += cw
                 
-            # Row Totals
+            # Row Totals (Subtotals)
             rt = cs['row_totals'][r_label]
             if display_mode == 'target': rt_str = str(rt['target'])
             elif display_mode == 'current': rt_str = str(rt['current'])
@@ -274,10 +276,12 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
             
             is_hl = rt['current'] == rt['target'] and rt['target'] > 0 and not rt['any_exceeded']
             is_ex = rt['current'] > rt['target']
-            bg_tot = EXCEEDED_BG if is_ex else (HIGHLIGHT_BG if is_hl else bg)
+            
+            # Row totals are subtotals (use black if filled)
+            bg_tot = EXCEEDED_BG if is_ex else (SUBTOTAL_BG if is_hl else bg)
             draw.rectangle([cx, curr_y, cx + col_w[-1], curr_y + row_h], fill=bg_tot, outline=BORDER_COLOR)
             tw, th = get_text_size(rt_str, bold_font)
-            color = EXCEEDED_TEXT if is_ex else (HIGHLIGHT_TEXT if is_hl else TEXT_COLOR)
+            color = EXCEEDED_TEXT if is_ex else (SUBTOTAL_TEXT if is_hl else TEXT_COLOR)
             draw.text((cx + (col_w[-1]-tw)//2, curr_y + (row_h-th)//2), rt_str, fill=color, font=bold_font)
             curr_y += row_h
 
@@ -296,10 +300,12 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
             
             is_hl = ct['current'] == ct['target'] and ct['target'] > 0 and not ct['any_exceeded']
             is_ex = ct['current'] > ct['target']
-            bg_tot = EXCEEDED_BG if is_ex else (HIGHLIGHT_BG if is_hl else CELL_BG_ALT)
+            
+            # Column totals are subtotals (use black if filled)
+            bg_tot = EXCEEDED_BG if is_ex else (SUBTOTAL_BG if is_hl else CELL_BG_ALT)
             draw.rectangle([cx, curr_y, cx + col_w[c_idx+1], curr_y + row_h], fill=bg_tot, outline=BORDER_COLOR)
             tw, th = get_text_size(ct_str, bold_font)
-            color = EXCEEDED_TEXT if is_ex else (HIGHLIGHT_TEXT if is_hl else TEXT_COLOR)
+            color = EXCEEDED_TEXT if is_ex else (SUBTOTAL_TEXT if is_hl else TEXT_COLOR)
             draw.text((cx + (col_w[c_idx+1]-tw)//2, curr_y + (row_h-th)//2), ct_str, fill=color, font=bold_font)
             cx += col_w[c_idx+1]
         

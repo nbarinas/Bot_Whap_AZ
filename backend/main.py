@@ -1105,6 +1105,13 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         return full_reply, interactive_fallback, ctx
 
     if not is_media_unsupported:
+        # Detectar palabra "sobrecuota" (case-insensitive)
+        is_overquota_detected = "sobrecuota" in msg.lower()
+        if is_overquota_detected:
+            ctx["is_overquota_allowed"] = True
+            import re
+            msg = re.sub(r'sobrecuota', '', msg, flags=re.IGNORECASE).strip()
+            
         if state == "IDLE":
             if user_type == "INACTIVE_AGENT":
                 reply = "⚠️ Por el momento no estás activo para registrar cuotas.\n\nSin embargo, puedes validar números en base:"
@@ -1444,6 +1451,14 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     for q_id in quota_ids:
                         quota = db.query(models.BotQuota).get(q_id)
                         if quota:
+                            # Validar si la cuota ya está llena
+                            if quota.current_count >= quota.target_count and not ctx.get("is_overquota_allowed"):
+                                q_label = f"{quota.category} | {quota.value}" if (quota.category and quota.category != "General") else quota.value
+                                reply = f"❌ La cuota *{q_label}* ya está llena ({quota.current_count}/{quota.target_count}).\n\nSi realmente necesitas agregarla, por favor escribe 'sobrecuota' seguido de los datos."
+                                session.state = "IDLE"
+                                session.context_data = json.dumps({})
+                                return reply, None, {}
+
                             sub = models.QuotaSubmission(
                                 bot_quota_id=quota.id,
                                 phone_number=phone,
@@ -2402,6 +2417,12 @@ def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tupl
         labels = []
         for q_id in pending_ids:
             q = db.query(models.BotQuota).get(q_id)
+            
+            # Validar si la cuota ya está llena
+            if q.current_count >= q.target_count and not ctx.get("is_overquota_allowed"):
+                q_label = f"{q.category} | {q.value}" if (q.category and q.category != "General") else q.value
+                return f"❌ La cuota *{q_label}* ya está llena ({q.current_count}/{q.target_count}).\n\nSi deseas agregar una sobrecuota, inicia de nuevo escribiendo la palabra 'sobrecuota' al principio.", "IDLE", None
+
             sub = models.QuotaSubmission(
                 bot_quota_id=q.id,
                 phone_number=phone,
