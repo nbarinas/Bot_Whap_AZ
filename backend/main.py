@@ -1109,7 +1109,6 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         is_overquota_detected = "sobrecuota" in msg.lower()
         if is_overquota_detected:
             ctx["is_overquota_allowed"] = True
-            import re
             msg = re.sub(r'sobrecuota', '', msg, flags=re.IGNORECASE).strip()
             
         if state == "IDLE":
@@ -2225,7 +2224,7 @@ POINT_TYPE_ALIASES = {
 }
 
 def check_free_text_quota(db, study_code: str, msg: str):
-    import re
+    
     
     # Normalize: lowercase and get all alphanumeric tokens plus hyphens (for ages like 18-30)
     def get_tokens(text):
