@@ -9,9 +9,11 @@ venv_az/
 .venv/
 .env
 .sqlite
-.db
+*.db
 database.db
 az_marketing.db
 cloudflared.exe
 .DS_Store
 .vscode/
+
+!bot_data.db

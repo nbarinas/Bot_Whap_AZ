@@ -11,95 +11,72 @@ ROOT_AZ_DB = os.path.abspath(os.path.join(BASE_DIR, '..', 'az_marketing.db'))
 
 LOCAL_AZ_DB_PATH = SIBLING_AZ_DB if os.path.exists(SIBLING_AZ_DB) else ROOT_AZ_DB
 
-# 1. BOT DATABASE (Read/Write for Quotas and Sessions)
-# Defaults to a local sqlite file in the backend folder
-BOT_DB_URL = os.getenv("BOT_DATABASE_URL", f"sqlite:///{os.path.join(BASE_DIR, 'bot_data.db')}")
+# 1. PATH RESOLUTION
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Shared DB in the 'az' sibling folder
+SHARED_DB_PATH = os.path.abspath(os.path.join(BASE_DIR, '..', '..', 'az', 'az_marketing.db'))
+# Local fallback if sibling is missing
+LOCAL_BACKUP_DB = os.path.abspath(os.path.join(BASE_DIR, '..', 'bot_data.db'))
 
-if BOT_DB_URL.startswith("postgres://"):
-    BOT_DB_URL = BOT_DB_URL.replace("postgres://", "postgresql://", 1)
-if BOT_DB_URL.startswith("mysql://"):
-    BOT_DB_URL = BOT_DB_URL.replace("mysql://", "mysql+pymysql://", 1)
+FINAL_SQLITE_PATH = SHARED_DB_PATH if os.path.exists(SHARED_DB_PATH) else LOCAL_BACKUP_DB
+SQLITE_URL = f"sqlite:///{FINAL_SQLITE_PATH}"
 
-shared_engine_args = {
-    "pool_size": 10,
-    "max_overflow": 20,
-    "pool_pre_ping": True,
-}
+# 2. ENGINES CONFIGURATION
+BOT_DB_URL = os.getenv("BOT_DATABASE_URL")
+USERS_DB_URL = os.getenv("USERS_DATABASE_URL") or os.getenv("DATABASE_URL")
 
-def get_engine_args(url):
-    args = shared_engine_args.copy()
-    if "mysql" in url:
-        args["pool_recycle"] = 280
-        args["connect_args"] = {"connect_timeout": 30} # Increased to 30s
-    elif "postgresql" in url:
-        args["connect_args"] = {"connect_timeout": 30}
-    elif "sqlite" in url:
-        args["connect_args"] = {"check_same_thread": False}
-    return args
+def create_robust_engine(url, is_bot=True):
+    if not url:
+        print(f"INFO: No URL for {'Bot' if is_bot else 'Users'}. Using SQLite: {FINAL_SQLITE_PATH}")
+        return create_engine(SQLITE_URL, connect_args={"check_same_thread": False})
+    
+    # Preparation
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    elif url.startswith("mysql://"):
+        url = url.replace("mysql://", "mysql+pymysql://", 1)
+    
+    engine_kwargs = {
+        "pool_pre_ping": True,
+        "pool_recycle": 280
+    }
+    
+    if "sqlite" in url:
+        return create_engine(url, connect_args={"check_same_thread": False})
+    else:
+        # Add timeout to avoid hanging
+        engine_kwargs["connect_args"] = {"connect_timeout": 10}
+        
+    try:
+        engine = create_engine(url, **engine_kwargs)
+        # Test connection
+        with engine.connect() as conn:
+            pass
+        return engine
+    except Exception as e:
+        print(f"ERROR: Falló conexión a {'Bot' if is_bot else 'Users'} DB externa ({e}). USANDO SQLITE.")
+        return create_engine(SQLITE_URL, connect_args={"check_same_thread": False})
 
-bot_engine = create_engine(BOT_DB_URL, **get_engine_args(BOT_DB_URL))
+# Engines
+bot_engine = create_robust_engine(BOT_DB_URL, is_bot=True)
+users_engine = create_robust_engine(USERS_DB_URL, is_bot=False)
+
+# Sessions
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=bot_engine)
-Base = declarative_base()
-
-# Bot Fallback Engine
-bot_fallback_engine = create_engine(f"sqlite:///{os.path.join(BASE_DIR, 'bot_data.db')}", connect_args={"check_same_thread": False})
-BotFallbackSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=bot_fallback_engine)
-
-# 2. USERS DATABASE (Strictly Read-Only from Click Panda SQL or local testing AZ)
-USERS_DB_URL = os.getenv("USERS_DATABASE_URL") or os.getenv("DATABASE_URL") or f"sqlite:///{LOCAL_AZ_DB_PATH}"
-
-if USERS_DB_URL.startswith("postgres://"):
-    USERS_DB_URL = USERS_DB_URL.replace("postgres://", "postgresql://", 1)
-if USERS_DB_URL.startswith("mysql://"):
-    USERS_DB_URL = USERS_DB_URL.replace("mysql://", "mysql+pymysql://", 1)
-
-users_engine = create_engine(USERS_DB_URL, **get_engine_args(USERS_DB_URL))
 UsersSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=users_engine)
+
+Base = declarative_base()
 UsersBase = declarative_base()
 
-# Users Fallback Engine
-users_fallback_engine = create_engine(f"sqlite:///{LOCAL_AZ_DB_PATH}", connect_args={"check_same_thread": False})
-UsersFallbackSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=users_fallback_engine)
-
 def get_db():
-    """
-    Tries to connect to the primary Bot DB.
-    Falls back to local SQLite if it fails.
-    """
-    db_type = "Primary"
-    try:
-        # Quick test for non-sqlite
-        if "sqlite" not in BOT_DB_URL:
-            with bot_engine.connect() as conn:
-                pass
-        db = SessionLocal()
-    except Exception as e:
-        print(f"WARNING: Bot Primary DB Unreachable ({e}). Initializing fallback.")
-        db = BotFallbackSessionLocal()
-        db_type = "Fallback"
-    
+    db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
 
 def get_users_db():
-    """
-    Tries to connect to the primary Users DB (from Environment).
-    Falls back to local SQLite if it fails.
-    """
-    db_type = "Primary"
-    try:
-        # Quick test for non-sqlite
-        if "sqlite" not in USERS_DB_URL:
-            with users_engine.connect() as conn:
-                pass
-        db = UsersSessionLocal()
-    except Exception as e:
-        print(f"WARNING: Users Primary DB Unreachable ({e}). Initializing fallback.")
-        db = UsersFallbackSessionLocal()
-        db_type = "Fallback"
-    
+    db = UsersSessionLocal()
     try:
         yield db
     finally:
