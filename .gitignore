@@ -1,19 +1,27 @@
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-venv_az/
-.venv/
+*.py[cod]
+*$py.class
 .env
-.sqlite
-*.db
-database.db
-az_marketing.db
-cloudflared.exe
-.DS_Store
-.vscode/
+venv/
+.venv/
 
-!bot_data.db
+# Databases (Local-only)
+*.db
+*.sqlite
+
+# Executables and Binaries
+*.exe
+cloudflared.exe
+
+# Manual scripts and utilities
+migrate_*.py
+test_*.py
+check_db.py
+sync_db.py
+refactor.py
+rename.py
+
+# System/IDE
+.vscode/
+.DS_Store
+.idea/
