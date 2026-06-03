@@ -2227,7 +2227,9 @@ POINT_TYPE_ALIASES = {
     "zona comercial": ["zona"],
     "colegio/universidad": ["colegio", "universidad", "cole", "u", "uni"],
     "hospital": ["hospital", "hosp", "hospi", "clinica", "clínica"],
-    "estación de transporte": ["estacion", "estación", "transporte", "portal", "terminal", "paradero"]
+    "clinica": ["hospital", "hosp", "hospi", "clinica", "clínica"],
+    "estación de transporte transportes": ["estacion", "estación", "transporte", "transportes", "portal", "terminal", "paradero"],
+    "cancha deportiva unidad": ["cancha", "unidad", "deportiva", "canchas", "polideportivo"]
 }
 
 def check_free_text_quota(db, study_code: str, msg: str):
