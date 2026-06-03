@@ -157,35 +157,35 @@ def diagnostic_check(db: Session = Depends(database.get_db)):
 def on_startup():
     print("Application startup: initializing database engines...")
     
-    # 1. Initialize LOCAL Fallbacks first (No network required, very fast)
-    # This ensures "Contingency Mode" is ready even if MySQL is slow/down
+    # 1. Initialize tables on Bot Database (Robust primary or auto SQLite fallback)
     try:
-        models.Base.metadata.create_all(bind=database.bot_fallback_engine)
-        models.UsersBase.metadata.create_all(bind=database.users_fallback_engine)
-        print("Fallback databases initialized and ready.")
+        models.Base.metadata.create_all(bind=database.bot_engine)
+        print("Bot database tables initialized successfully.")
     except Exception as e:
-        print(f"CRITICAL: Could not initialize Fallback Databases: {e}")
+        print(f"CRITICAL: Could not initialize Bot database tables: {e}")
 
-    # 2. Attempt to initialize Primary Engines (MySQL/Postgres)
+    # 2. Initialize tables on Users Database (Robust primary or auto SQLite fallback)
     try:
-        # Bot's internal database - only if it's NOT the same as fallback
-        if "sqlite" not in database.BOT_DB_URL:
-            models.Base.metadata.create_all(bind=database.bot_engine)
+        models.UsersBase.metadata.create_all(bind=database.users_engine)
+        print("Users database tables initialized successfully.")
+    except Exception as e:
+        print(f"CRITICAL: Could not initialize Users database tables: {e}")
         
-        # Optional: Add columns if needed
-        try:
-            from sqlalchemy import text
-            with database.bot_engine.begin() as conn:
-                conn.execute(text("ALTER TABLE bot_quotas ADD COLUMN is_closed INTEGER DEFAULT 0"))
-                conn.execute(text("ALTER TABLE bot_quotas ADD COLUMN point_type TEXT"))
-        except Exception:
-            pass 
-            
-        print("Primary database checks complete (or bypassed).")
-    except Exception as e:
-        print(f"INFO: Primary Database not reachable at startup ({e}). App will run in Contingency Mode.")
+    # 3. Optional: Add columns if needed
+    try:
+        from sqlalchemy import text
+        with database.bot_engine.begin() as conn:
+            conn.execute(text("ALTER TABLE bot_quotas ADD COLUMN is_closed INTEGER DEFAULT 0"))
+    except Exception:
+        pass 
+        
+    try:
+        from sqlalchemy import text
+        with database.bot_engine.begin() as conn:
+            conn.execute(text("ALTER TABLE bot_quotas ADD COLUMN point_type TEXT"))
+    except Exception:
+        pass 
 
-    # Start background tasks
     print("Startup sequence finished. Application is ready.")
 
 @app.get("/")
