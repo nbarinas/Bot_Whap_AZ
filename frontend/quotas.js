@@ -633,8 +633,17 @@ function editStudy(studyId, studyCode) {
                         // Patrón Edad: Tiene guion (20-35) o signo más (45+)
                         if (q.category.includes("-") || q.category.includes("+") || q.value.includes("-") || q.value.includes("+")) {
                             foundCats.add("Edad");
-                            if (q.value.includes("-") || q.value.includes("+")) customAges.add(q.value);
-                            else customAges.add(q.category);
+                            if (q.value.includes("-") || q.value.includes("+")) {
+                                customAges.add(q.value);
+                            } else {
+                                const parts = q.category.split(" | ");
+                                const agePart = parts.find(p => p.includes("-") || p.includes("+"));
+                                if (agePart) {
+                                    customAges.add(agePart);
+                                } else {
+                                    customAges.add(q.category);
+                                }
+                            }
                         }
 
                         // Patrón NSE: Valores estándar (MT, MB, BA)
