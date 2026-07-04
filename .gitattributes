@@ -1,0 +1,26 @@
+# Normalizar automáticamente todos los archivos de texto a LF
+* text=auto
+
+# Forzar LF en archivos comunes del proyecto
+*.py text eol=lf
+*.html text eol=lf
+*.js text eol=lf
+*.css text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sql text eol=lf
+
+# Archivos binarios que no deben tocarse
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.mp4 binary
+*.db binary
+*.exe binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary

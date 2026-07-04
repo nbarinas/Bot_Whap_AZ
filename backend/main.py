@@ -2464,7 +2464,15 @@ def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tupl
                 
     if not next_options:
         return "⚠️ Error al conseguir la siguiente categoría.", "IDLE", None
-        
+    
+    # Auto-skip dimensions with only one option to save taps and time
+    if len(next_options) == 1:
+        ctx["selected_path"] = selected_path + [next_options[0]]
+        return compute_next_bot_step_interactive(db, ctx, phone, sender_name)
+    
+    # Detect if current phase is point type (always use list for it)
+    is_current_phase_pt = len(quotas) > 0 and any(q.category == "Tipo de Punto" for q in quotas)
+    
     ctx["current_options"] = next_options
     if depth == 0:
         if pending_ids:
@@ -2478,15 +2486,28 @@ def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tupl
     for i, o in enumerate(next_options):
         # WA interactive lists have a limit of 24 chars for the title
         rows.append({"id": str(i+1), "title": str(o)[:24]})
-        
-    # Let's chunk to 10 max if there are more than 10 options, although Meta limits per section are 10
-    interactive_data = {
-        "type": "list",
-        "body": {"text": reply},
-        "action": {
-            "button": "Seleccionar",
-            "sections": [{"title": "Categorías", "rows": rows[:10]}]
+    
+    # Use buttons for 3 or fewer options (faster, one tap), except point type
+    # Use list for 4+ options or for point type (can have many options)
+    if not is_current_phase_pt and len(next_options) <= 3:
+        interactive_data = {
+            "type": "button",
+            "body": {"text": reply},
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": str(i+1), "title": str(o)[:20]}}
+                    for i, o in enumerate(next_options)
+                ]
+            }
         }
-    }
+    else:
+        interactive_data = {
+            "type": "list",
+            "body": {"text": reply},
+            "action": {
+                "button": "Seleccionar",
+                "sections": [{"title": "Categorías", "rows": rows[:10]}]
+            }
+        }
     ctx["interactive_fallback"] = interactive_data
     return reply, "WAITING_CATEGORY", interactive_data
