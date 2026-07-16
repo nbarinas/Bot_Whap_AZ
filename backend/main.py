@@ -932,9 +932,12 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         (models.BotActiveAgent.phone_number == normalized_phone)
     ).first()
     is_active = bool(active_agent)
+
+    user_role = getattr(user_record, "role", "") if user_record else ""
+    is_superuser_role = (user_role == "superuser")
     
     user_type = "UNKNOWN"
-    if (is_active and is_in_base) or phone == "0000":
+    if (is_active and is_in_base) or phone == "0000" or is_superuser_role:
         user_type = "AGENT"
     elif is_in_base:
         user_type = "INACTIVE_AGENT"
@@ -946,6 +949,11 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             user_type = "RESPONDENT"
         else:
             user_type = "UNKNOWN"
+
+    # --- RESUMEN CRM COMMAND (superuser or allowed admin numbers) ---
+    if msg == "resumen crm" and is_crm_summary_allowed(user_record, phone, normalized_phone):
+        confirmation = send_crm_summary_report(phone, db_users)
+        return confirmation, None
             
     # --- DETECCION DE CENSO (TRIGGER) ---
     if user_type == "AGENT" and not media_id:
@@ -1176,11 +1184,20 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     validate_idx = len(study_list) + 1
                     opts += f"\n{validate_idx}. Validar número en la base"
                     ctx["validate_option_idx"] = validate_idx
+                    ctx["crm_summary_option_idx"] = None
+
+                    is_crm_allowed = is_crm_summary_allowed(user_record, phone, normalized_phone)
+                    if is_crm_allowed:
+                        crm_idx = validate_idx + 1
+                        opts += f"\n{crm_idx}. Resumen CRM"
+                        ctx["crm_summary_option_idx"] = crm_idx
                 
                     greeting = f"¡Hola {agent_name}!" if agent_name else "¡Hola!"
                     reply = timeout_message + f"{greeting} ¿Qué deseas hacer?"
                 
                     menu_options = study_list + ["Validar en base"]
+                    if is_crm_allowed:
+                        menu_options.append("Resumen CRM")
                     interactive_data = build_interactive_options(
                         reply, menu_options,
                         list_button_text="Ver Opciones",
@@ -1237,11 +1254,17 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         elif state == "WAITING_STUDY":
             available = ctx.get("available_studies", [])
             validate_idx = ctx.get("validate_option_idx")
+            crm_summary_idx = ctx.get("crm_summary_option_idx")
             opts_text = "\n".join([f"{i+1}. {s}" for i, s in enumerate(available)])
             opts_text += f"\n{validate_idx}. Validar número en la base" if validate_idx else ""
+            if crm_summary_idx:
+                opts_text += f"\n{crm_summary_idx}. Resumen CRM"
             try:
                 choice = int(msg)
-                if 1 <= choice <= len(available):
+                if crm_summary_idx and choice == crm_summary_idx:
+                    confirmation = send_crm_summary_report(phone, db_users)
+                    return confirmation, None
+                elif 1 <= choice <= len(available):
                     study_code = available[choice - 1]
                     ctx["study_code"] = study_code
                     
@@ -2408,3 +2431,88 @@ def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tupl
     )
     ctx["interactive_fallback"] = interactive_data
     return reply, "WAITING_CATEGORY", interactive_data
+
+
+def get_crm_summary(db_users):
+    """
+    Query az_marketing.db for a global summary of active CRM studies,
+    broken down by interviewer (agent).
+    Returns a list of dicts: encuestador, estudio, total, pendientes, agendados, faltan, llevan
+    """
+    from sqlalchemy import text
+
+    sql = text("""
+        SELECT
+            COALESCE(NULLIF(u.full_name, ''), u.username) as agent_name,
+            s.name as study_name,
+            COUNT(*) as total,
+            SUM(CASE WHEN c.status = 'pending' THEN 1 ELSE 0 END) as pending,
+            SUM(CASE WHEN c.status = 'scheduled' THEN 1 ELSE 0 END) as scheduled,
+            SUM(CASE WHEN c.status IN ('managed', 'done', 'efectiva_campo') THEN 1 ELSE 0 END) as completed
+        FROM calls c
+        JOIN studies s ON c.study_id = s.id
+        JOIN users u ON c.user_id = u.id
+        WHERE s.is_active = 1 OR s.status = 'open'
+        GROUP BY s.id, s.name, u.id, u.full_name, u.username
+        ORDER BY agent_name, study_name
+    """)
+    result = db_users.execute(sql).fetchall()
+    summary = []
+    for row in result:
+        pending = int(row.pending or 0)
+        scheduled = int(row.scheduled or 0)
+        completed = int(row.completed or 0)
+        summary.append({
+            "encuestador": row.agent_name or "Sin nombre",
+            "estudio": row.study_name or "Sin nombre",
+            "total": int(row.total or 0),
+            "pendientes": pending,
+            "agendados": scheduled,
+            "faltan": pending + scheduled,
+            "llevan": completed
+        })
+    return summary
+
+
+CRM_ALLOWED_NUMBERS = ["573136623816", "3136623816"]
+
+
+def is_crm_summary_allowed(user_record, phone: str, normalized_phone: str) -> bool:
+    """Check if the phone/user is allowed to request the CRM summary."""
+    if user_record and getattr(user_record, "role", "") == "superuser":
+        return True
+    if phone in CRM_ALLOWED_NUMBERS or normalized_phone in CRM_ALLOWED_NUMBERS:
+        return True
+    return False
+
+
+def send_crm_summary_report(phone: str, db_users):
+    """
+    Generates the CRM summary image and sends it via WhatsApp to the requester.
+    Returns a short confirmation/error text for the requester (caller will send it).
+    """
+    try:
+        summary = get_crm_summary(db_users)
+        if not summary:
+            return "📭 No hay estudios activos con llamadas registradas en este momento."
+
+        img_path = os.path.join(BASE_DIR, f"crm_summary_{datetime.now().strftime('%Y%m%d%H%M%S')}.png")
+        render_utils.generate_crm_summary_image(summary, img_path)
+
+        media_id = upload_media.upload_media(img_path, "image/png")
+        try:
+            if os.path.exists(img_path):
+                os.remove(img_path)
+        except Exception:
+            pass
+
+        if not media_id:
+            return "⚠️ No se pudo subir la imagen del resumen. Por favor intenta de nuevo."
+
+        caption = "📊 *Resumen CRM - Estudios Activos*"
+        send_whatsapp_media(phone, "image", media_id, caption)
+
+        return "✅ Te acabo de enviar el resumen del CRM con los estudios activos."
+    except Exception as e:
+        print(f"Error in send_crm_summary_report: {e}")
+        return "⚠️ Ocurrió un error generando el resumen del CRM."

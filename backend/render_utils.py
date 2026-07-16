@@ -382,3 +382,182 @@ def get_pilot_sections(standard_sections):
         pilot_sections.append(sec_current)
         
     return pilot_sections
+
+
+def generate_crm_summary_image(data, output_path="crm_summary_report.png"):
+    """
+    Renders a compact table image for the CRM summary by interviewer.
+    data: list of dicts with keys: encuestador, estudio, total, pendientes, agendados, faltan, llevan
+    """
+    PADDING = 30
+    CELL_PADDING_H = 12
+    CELL_PADDING_V = 10
+    HEADER_BG = (45, 52, 71)
+    HEADER_TEXT = (255, 255, 255)
+    CELL_BG = (255, 255, 255)
+    CELL_BG_ALT = (248, 249, 252)
+    BORDER_COLOR = (218, 220, 224)
+    TEXT_COLOR = (60, 64, 67)
+    PRIMARY_LABEL_COLOR = (32, 33, 36)
+    ACCENT_BG = (239, 246, 255)
+    SUBTOTAL_BG = (226, 232, 240)
+    WARN_BG = (255, 251, 235)
+    WARN_TEXT = (146, 64, 14)
+    OK_BG = (240, 253, 244)
+    OK_TEXT = (21, 128, 61)
+
+    font, bold_font, title_font, footer_font = None, None, None, None
+    possible_fonts = ["C:\\Windows\\Fonts\\arial.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+    possible_bolds = ["C:\\Windows\\Fonts\\arialbd.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
+
+    for fp in possible_fonts:
+        if os.path.exists(fp):
+            font = ImageFont.truetype(fp, 15)
+            footer_font = ImageFont.truetype(fp, 12)
+            break
+    for bp in possible_bolds:
+        if os.path.exists(bp):
+            bold_font = ImageFont.truetype(bp, 15)
+            title_font = ImageFont.truetype(bp, 22)
+            break
+
+    if not font:
+        font = footer_font = ImageFont.load_default()
+    if not bold_font:
+        bold_font = title_font = ImageFont.load_default()
+
+    headers = ["Encuestador", "Estudio", "Total", "Pendientes", "Agendados", "Faltan", "Llevan"]
+    keys = ["encuestador", "estudio", "total", "pendientes", "agendados", "faltan", "llevan"]
+    numeric_keys = ["total", "pendientes", "agendados", "faltan", "llevan"]
+
+    # Build display rows with subtotals per interviewer
+    display_rows = []
+    subtotals = {}
+    global_totals = {"estudio": "TOTAL", "total": 0, "pendientes": 0, "agendados": 0, "faltan": 0, "llevan": 0}
+    current_agent = None
+
+    for row in data:
+        agent = row.get("encuestador", "Sin nombre")
+        if agent != current_agent:
+            if current_agent is not None:
+                # Add subtotal row for previous agent
+                st = subtotals[current_agent]
+                display_rows.append({
+                    "encuestador": current_agent,
+                    "estudio": "Subtotal",
+                    "total": st["total"],
+                    "pendientes": st["pendientes"],
+                    "agendados": st["agendados"],
+                    "faltan": st["faltan"],
+                    "llevan": st["llevan"],
+                    "is_subtotal": True
+                })
+            current_agent = agent
+            subtotals[current_agent] = {"total": 0, "pendientes": 0, "agendados": 0, "faltan": 0, "llevan": 0}
+        display_rows.append({**row, "is_subtotal": False})
+        for k in numeric_keys:
+            subtotals[current_agent][k] += int(row.get(k, 0) or 0)
+            global_totals[k] += int(row.get(k, 0) or 0)
+
+    # Add last subtotal
+    if current_agent is not None:
+        st = subtotals[current_agent]
+        display_rows.append({
+            "encuestador": current_agent,
+            "estudio": "Subtotal",
+            "total": st["total"],
+            "pendientes": st["pendientes"],
+            "agendados": st["agendados"],
+            "faltan": st["faltan"],
+            "llevan": st["llevan"],
+            "is_subtotal": True
+        })
+
+    all_rows = display_rows + [global_totals]
+
+    # Calculate column widths
+    col_widths = []
+    for i, h in enumerate(headers):
+        header_w = get_text_size(h, bold_font)[0]
+        max_val_w = header_w
+        for r in all_rows:
+            key = keys[i]
+            val = str(r.get(key, ""))
+            is_bold = r.get("is_subtotal") or r.get("estudio") == "TOTAL"
+            max_val_w = max(max_val_w, get_text_size(val, bold_font if is_bold else font)[0])
+        col_widths.append(max_val_w + 2 * CELL_PADDING_H)
+
+    row_h = get_text_size("AnyText", bold_font)[1] + 2 * CELL_PADDING_V
+    table_w = sum(col_widths)
+    img_w = max(600, table_w + 2 * PADDING)
+    header_h = 70
+    footer_h = 40
+    img_h = header_h + footer_h + (len(all_rows) + 1) * row_h + 2 * PADDING
+
+    img = Image.new("RGB", (img_w, img_h), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
+
+    # Title
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    title_text = "RESUMEN CRM - ESTUDIOS ACTIVOS POR ENCUESTADOR"
+    tw, _ = get_text_size(title_text, title_font)
+    draw.text(((img_w - tw) // 2, 20), title_text, fill=PRIMARY_LABEL_COLOR, font=title_font)
+
+    curr_y = header_h
+    start_x = (img_w - table_w) // 2
+
+    # Header row
+    cx = start_x
+    for i, h in enumerate(headers):
+        cw = col_widths[i]
+        draw.rectangle([cx, curr_y, cx + cw, curr_y + row_h], fill=HEADER_BG, outline=BORDER_COLOR)
+        hw, hh = get_text_size(h, bold_font)
+        draw.text((cx + (cw - hw) // 2, curr_y + (row_h - hh) // 2), h, fill=HEADER_TEXT, font=bold_font)
+        cx += cw
+    curr_y += row_h
+
+    # Data rows
+    for idx, r in enumerate(all_rows):
+        is_total = r.get("estudio") == "TOTAL"
+        is_subtotal = r.get("is_subtotal", False)
+        bg = CELL_BG if idx % 2 == 0 else CELL_BG_ALT
+        if is_total:
+            bg = ACCENT_BG
+        elif is_subtotal:
+            bg = SUBTOTAL_BG
+        cx = start_x
+        for i, key in enumerate(keys):
+            cw = col_widths[i]
+            val = str(r.get(key, ""))
+            f = bold_font if is_total or is_subtotal else font
+            cell_bg = bg
+            text_color = TEXT_COLOR
+
+            # Color coding for numeric cells
+            if not is_total and not is_subtotal and key in numeric_keys:
+                num_val = int(r.get(key, 0) or 0)
+                if key in ["pendientes", "agendados", "faltan"] and num_val > 0:
+                    cell_bg = WARN_BG
+                    text_color = WARN_TEXT
+                elif key == "llevan" and num_val > 0:
+                    cell_bg = OK_BG
+                    text_color = OK_TEXT
+
+            draw.rectangle([cx, curr_y, cx + cw, curr_y + row_h], fill=cell_bg, outline=BORDER_COLOR)
+            vw, vh = get_text_size(val, f)
+            # Left align text columns, center numeric columns
+            if key in ["encuestador", "estudio"]:
+                tx = cx + CELL_PADDING_H
+            else:
+                tx = cx + (cw - vw) // 2
+            draw.text((tx, curr_y + (row_h - vh) // 2), val, fill=text_color, font=f)
+            cx += cw
+        curr_y += row_h
+
+    # Footer
+    footer = f"Reporte automático AZ Marketing - {timestamp}"
+    fw, _ = get_text_size(footer, footer_font)
+    draw.text(((img_w - fw) // 2, img_h - 25), footer, fill=(128, 128, 128), font=footer_font)
+
+    img.save(output_path)
+    return output_path
