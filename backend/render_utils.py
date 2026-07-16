@@ -11,10 +11,11 @@ def get_text_size(text, f):
         # Older Pillow
         return f.getsize(str(text))
 
-def generate_multi_table_report(sections, study_code, output_path="quota_report.png"):
+def generate_multi_table_report(sections, study_code, output_path="quota_report.png", title=None):
     """
     Renders multiple table sections vertically into one compact image.
     sections: list of { title, data_map, ordered_first_nodes, ordered_leaf_nodes, sorted_rows }
+    If title is provided, it overrides the default REPORTE: {study_code} title.
     """
     # Stylistic constants
     PADDING = 30
@@ -171,7 +172,7 @@ def generate_multi_table_report(sections, study_code, output_path="quota_report.
 
     # 1. Main Title
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    title_text = f"REPORTE: {study_code.upper()}"
+    title_text = title if title else f"REPORTE: {study_code.upper()}"
     tw, _ = get_text_size(title_text, title_font)
     draw.text(((max_img_w - tw)//2, 20), title_text, fill=PRIMARY_LABEL_COLOR, font=title_font)
 

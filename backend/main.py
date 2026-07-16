@@ -954,6 +954,30 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
     if msg == "resumen crm" and is_crm_summary_allowed(user_record, phone, normalized_phone):
         confirmation = send_crm_summary_report(phone, db_users)
         return confirmation, None
+
+    # --- UNIFICAR ESTUDIOS COMMAND (superuser or allowed admin numbers) ---
+    if msg == "unificar estudios" and is_crm_summary_allowed(user_record, phone, normalized_phone):
+        study_codes = get_bot_active_study_codes(db)
+        if len(study_codes) < 2:
+            return "📭 No hay suficientes estudios activos para unificar (se necesitan al menos 2).", None
+
+        # Reset session for selection flow
+        session = db.query(models.BotSession).filter(models.BotSession.phone_number == phone).first()
+        if session:
+            db.delete(session)
+            db.commit()
+        session = models.BotSession(phone_number=phone, state="WAITING_UNIFY_SELECTION", context_data="{}")
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+
+        ctx = {"available_studies": study_codes, "invalid_attempts": 0}
+        session.context_data = json.dumps(ctx)
+        db.commit()
+
+        opts_text = "\n".join([f"{i+1}. {s}" for i, s in enumerate(study_codes)])
+        reply = f"📊 *Unificar estudios*\n\nSelecciona de 2 a 6 estudios respondiendo con los números separados por comas (ej: 1,3,5):\n\n{opts_text}"
+        return reply, None
             
     # --- DETECCION DE CENSO (TRIGGER) ---
     if user_type == "AGENT" and not media_id:
@@ -1185,12 +1209,17 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     opts += f"\n{validate_idx}. Validar número en la base"
                     ctx["validate_option_idx"] = validate_idx
                     ctx["crm_summary_option_idx"] = None
+                    ctx["unify_option_idx"] = None
 
                     is_crm_allowed = is_crm_summary_allowed(user_record, phone, normalized_phone)
                     if is_crm_allowed:
                         crm_idx = validate_idx + 1
                         opts += f"\n{crm_idx}. Resumen CRM"
                         ctx["crm_summary_option_idx"] = crm_idx
+                        if len(study_list) >= 2:
+                            unify_idx = crm_idx + 1
+                            opts += f"\n{unify_idx}. Unificar estudios"
+                            ctx["unify_option_idx"] = unify_idx
                 
                     greeting = f"¡Hola {agent_name}!" if agent_name else "¡Hola!"
                     reply = timeout_message + f"{greeting} ¿Qué deseas hacer?"
@@ -1198,6 +1227,8 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     menu_options = study_list + ["Validar en base"]
                     if is_crm_allowed:
                         menu_options.append("Resumen CRM")
+                        if len(study_list) >= 2:
+                            menu_options.append("Unificar estudios")
                     interactive_data = build_interactive_options(
                         reply, menu_options,
                         list_button_text="Ver Opciones",
@@ -1255,15 +1286,28 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             available = ctx.get("available_studies", [])
             validate_idx = ctx.get("validate_option_idx")
             crm_summary_idx = ctx.get("crm_summary_option_idx")
+            unify_idx = ctx.get("unify_option_idx")
             opts_text = "\n".join([f"{i+1}. {s}" for i, s in enumerate(available)])
             opts_text += f"\n{validate_idx}. Validar número en la base" if validate_idx else ""
             if crm_summary_idx:
                 opts_text += f"\n{crm_summary_idx}. Resumen CRM"
+            if unify_idx:
+                opts_text += f"\n{unify_idx}. Unificar estudios"
             try:
                 choice = int(msg)
                 if crm_summary_idx and choice == crm_summary_idx:
                     confirmation = send_crm_summary_report(phone, db_users)
                     return confirmation, None
+                elif unify_idx and choice == unify_idx:
+                    if len(available) < 2:
+                        reply, interactive_data, ctx = handle_invalid("No hay suficientes estudios para unificar.", opts_text, ctx.get("interactive_fallback"))
+                    else:
+                        session.state = "WAITING_UNIFY_SELECTION"
+                        ctx["invalid_attempts"] = 0
+                        ctx.pop("study_code", None)
+                        opts = "\n".join([f"{i+1}. {s}" for i, s in enumerate(available)])
+                        reply = f"📊 *Unificar estudios*\n\nSelecciona de 2 a 6 estudios respondiendo con los números separados por comas (ej: 1,3,5):\n\n{opts}"
+                        return reply, None
                 elif 1 <= choice <= len(available):
                     study_code = available[choice - 1]
                     ctx["study_code"] = study_code
@@ -1286,6 +1330,38 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     reply, interactive_data, ctx = handle_invalid("Opción inválida.", opts_text, ctx.get("interactive_fallback"))
             except ValueError:
                 reply, interactive_data, ctx = handle_invalid("Selección inválida.", opts_text, ctx.get("interactive_fallback"))
+
+        elif state == "WAITING_UNIFY_SELECTION":
+            available = ctx.get("available_studies", [])
+            opts_text = "\n".join([f"{i+1}. {s}" for i, s in enumerate(available)])
+
+            if msg in ["salir", "cancelar", "0"]:
+                reply = "❌ Operación cancelada. Escribe 'Hola' para empezar de nuevo."
+                session.state = "IDLE"
+                ctx = {}
+            else:
+                # Parse selections separated by comma, space, or dash
+                raw_parts = re.split(r'[,\s\-]+', msg)
+                selected_indices = []
+                seen = set()
+                for part in raw_parts:
+                    p = part.strip()
+                    if p.isdigit():
+                        idx = int(p)
+                        if 1 <= idx <= len(available) and idx not in seen:
+                            selected_indices.append(idx)
+                            seen.add(idx)
+
+                if len(selected_indices) < 2:
+                    reply = f"⚠️ Debes seleccionar al menos 2 estudios.\n\n{opts_text}\n\nResponde con los números separados por comas (ej: 1,3,5) o 'salir' para cancelar."
+                elif len(selected_indices) > 6:
+                    reply = f"⚠️ Solo puedes seleccionar hasta 6 estudios.\n\n{opts_text}\n\nResponde con los números separados por comas (ej: 1,3,5) o 'salir' para cancelar."
+                else:
+                    selected_codes = [available[i - 1] for i in selected_indices]
+                    confirmation = send_unified_studies_report(phone, db, selected_codes)
+                    reply = confirmation
+                    session.state = "IDLE"
+                    ctx = {}
 
         elif state == "WAITING_ACTION":
             opts_text = "1. Añadir 1 encuesta\n2. Borrar mi última\n3. Ver cuotas actuales"
@@ -2516,3 +2592,129 @@ def send_crm_summary_report(phone: str, db_users):
     except Exception as e:
         print(f"Error in send_crm_summary_report: {e}")
         return "⚠️ Ocurrió un error generando el resumen del CRM."
+
+
+def build_study_quota_sections(db, study_code):
+    """
+    Build standard quota sections for a single bot study.
+    Returns list of sections ready for render_utils.generate_multi_table_report.
+    """
+    all_study_quotas = db.query(models.BotQuota).filter(
+        models.BotQuota.study_code == study_code,
+        ~models.BotQuota.value.startswith("Censos")
+    ).all()
+
+    if not all_study_quotas:
+        return []
+
+    def build_sec_data(quotas):
+        col_tree = {}
+        row_keys = set()
+        data_map = {}
+        for q in quotas:
+            parts = q.category.split(' | ') if '|' in q.category else [q.category]
+            parts.append(q.value)
+            path_tuple = tuple(p.strip() for p in parts if p.strip())
+            if not path_tuple:
+                continue
+
+            first_node = path_tuple[0]
+            if len(path_tuple) > 2:
+                middle_str = " | ".join(path_tuple[1:-1])
+                leaf_node = path_tuple[-1]
+            elif len(path_tuple) == 2:
+                middle_str = "-"
+                leaf_node = path_tuple[-1]
+            else:
+                middle_str = "-"
+                leaf_node = path_tuple[0]
+
+            if first_node not in col_tree:
+                col_tree[first_node] = set()
+            col_tree[first_node].add(leaf_node)
+            row_keys.add(middle_str)
+            if middle_str not in data_map:
+                data_map[middle_str] = {}
+            if first_node not in data_map[middle_str]:
+                data_map[middle_str][first_node] = {}
+            data_map[middle_str][first_node][leaf_node] = {'current': q.current_count, 'target': q.target_count}
+
+        ordered_fns = sorted(list(col_tree.keys()))
+        ordered_lns = {fn: sorted(list(col_tree[fn])) for fn in ordered_fns}
+        return data_map, ordered_fns, ordered_lns, sorted(list(row_keys))
+
+    sections = []
+    std_quotas = [q for q in all_study_quotas if q.category != "Tipo de Punto"]
+    if std_quotas:
+        dm, ofn, oln, sr = build_sec_data(std_quotas)
+        sections.append({
+            'title': f'{study_code} - Cuota Demográfica',
+            'data_map': dm,
+            'ordered_first_nodes': ofn,
+            'ordered_leaf_nodes': oln,
+            'sorted_rows': sr,
+            'header_bg': (45, 52, 71)
+        })
+
+    pt_quotas = [q for q in all_study_quotas if q.category == "Tipo de Punto"]
+    if pt_quotas:
+        dm, ofn, oln, sr = build_sec_data(pt_quotas)
+        sections.append({
+            'title': f'{study_code} - Cuota Tipos de Puntos',
+            'data_map': dm,
+            'ordered_first_nodes': ofn,
+            'ordered_leaf_nodes': oln,
+            'sorted_rows': sr,
+            'header_bg': (0, 82, 162)
+        })
+
+    return sections
+
+
+def get_bot_active_study_codes(db):
+    """Return sorted list of active bot study codes from BotQuota."""
+    studies = db.query(models.BotQuota.study_code).filter(models.BotQuota.is_closed == 0).distinct().all()
+    return sorted([s[0] for s in studies if s[0]])
+
+
+def send_unified_studies_report(phone: str, db, study_codes: list):
+    """
+    Generate and send a single image containing multiple bot study quota tables.
+    Returns a short confirmation/error text for the caller to send.
+    """
+    try:
+        if not study_codes or len(study_codes) < 2:
+            return "⚠️ Debes seleccionar al menos 2 estudios para unificar."
+        if len(study_codes) > 6:
+            return "⚠️ Solo puedes unificar hasta 6 estudios."
+
+        all_sections = []
+        for code in study_codes:
+            sections = build_study_quota_sections(db, code)
+            all_sections.extend(sections)
+
+        if not all_sections:
+            return "📭 No se encontraron cuotas para los estudios seleccionados."
+
+        title = "REPORTE UNIFICADO: " + ", ".join(study_codes)
+        safe_codes = "_".join("".join(c if c.isalnum() else "_" for c in code) for code in study_codes)
+        img_path = os.path.join(BASE_DIR, f"unified_{safe_codes}_{datetime.now().strftime('%Y%m%d%H%M%S')}.png")
+        render_utils.generate_multi_table_report(all_sections, "unified", img_path, title=title)
+
+        media_id = upload_media.upload_media(img_path, "image/png")
+        try:
+            if os.path.exists(img_path):
+                os.remove(img_path)
+        except Exception:
+            pass
+
+        if not media_id:
+            return "⚠️ No se pudo subir la imagen unificada. Por favor intenta de nuevo."
+
+        caption = "📊 *Reporte Unificado de Estudios*"
+        send_whatsapp_media(phone, "image", media_id, caption)
+
+        return "✅ Te acabo de enviar el reporte unificado de estudios."
+    except Exception as e:
+        print(f"Error in send_unified_studies_report: {e}")
+        return "⚠️ Ocurrió un error generando el reporte unificado."
