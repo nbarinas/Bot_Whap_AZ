@@ -1352,6 +1352,12 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                         if phone != "0000":
                             send_whatsapp_message(phone, reply)
                     else:
+                        session.state = "WAITING_UNIFY_HELP"
+                        ctx["available_studies"] = available
+                        ctx["invalid_attempts"] = 0
+                        session.context_data = json.dumps(ctx)
+                        db.commit()
+                        print(f"DEBUG: session saved to WAITING_UNIFY_HELP for {phone}")
                         if phone != "0000":
                             send_unify_selection_prompt(phone, available)
                             send_whatsapp_message(phone, "📊 Escribe *uni* seguido de los números de los estudios que quieres unificar.\nEjemplo: *uni 1,2,3*")
@@ -1379,11 +1385,97 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             except ValueError:
                 reply, interactive_data, ctx = handle_invalid("Selección inválida.", opts_text, ctx.get("interactive_fallback"))
 
-        elif state == "WAITING_UNIFY_SELECTION":
-            # Legacy state: direct users to the new "uni" command
-            reply = "📊 Para unificar estudios escribe *uni* seguido de los números de los estudios.\nEjemplo: *uni 1,2,3*"
-            session.state = "IDLE"
-            ctx = {}
+        elif state in ("WAITING_UNIFY_SELECTION", "WAITING_UNIFY_HELP"):
+            available = ctx.get("available_studies", [])
+            print(f"DEBUG: {state} received '{msg}' from {phone}, available={len(available)}")
+
+            if msg in ["salir", "cancelar", "0"]:
+                reply = "❌ Operación cancelada. Escribe 'Hola' para empezar de nuevo."
+                session.state = "IDLE"
+                ctx = {}
+            elif msg.startswith("uni"):
+                # Extract numbers from the rest of the message
+                rest = msg[3:].strip()
+                raw_parts = re.split(r'[,\s\-]+', rest)
+                selected_indices = []
+                seen = set()
+                for part in raw_parts:
+                    p = part.strip()
+                    if p.isdigit():
+                        idx = int(p)
+                        if 1 <= idx <= len(available) and idx not in seen:
+                            selected_indices.append(idx)
+                            seen.add(idx)
+
+                print(f"DEBUG: {state} selected_indices={selected_indices}")
+                if 2 <= len(selected_indices) <= 6:
+                    selected_codes = [available[i - 1] for i in selected_indices]
+                    print(f"DEBUG: {state} generating unified report for {selected_codes}")
+                    confirmation = send_unified_studies_report(phone, db, selected_codes)
+                    print(f"DEBUG: {state} unified report confirmation: {confirmation[:80] if confirmation else 'None'}...")
+                    if phone != "0000" and confirmation:
+                        send_whatsapp_message(phone, confirmation)
+                    session.state = "IDLE"
+                    ctx = {}
+                    return None, None
+                else:
+                    # Invalid selection, count attempts
+                    attempts = ctx.get("invalid_attempts", 0) + 1
+                    if attempts >= 3:
+                        # Return to main menu
+                        if user_type == "AGENT":
+                            _, interactive_data, menu_ctx, menu_options = build_agent_main_menu(
+                                db, phone, user_record, agent_name, is_active, active_agent
+                            )
+                            session.state = "WAITING_STUDY"
+                            ctx = menu_ctx
+                            greeting = f"¡Hola {agent_name}!" if agent_name else "¡Hola!"
+                            reply = f"🚫 Demasiados intentos inválidos. Volviendo al menú principal.\n\n{greeting} ¿Qué deseas hacer?"
+                            interactive_data = build_interactive_options(
+                                reply, menu_options,
+                                list_button_text="Ver Opciones",
+                                section_title="Estudios Disponibles"
+                            )
+                            ctx["interactive_fallback"] = interactive_data
+                        else:
+                            reply = "🚫 Demasiados intentos inválidos. Volviendo al menú principal."
+                            session.state = "IDLE"
+                            ctx = {}
+                    else:
+                        ctx["invalid_attempts"] = attempts
+                        if len(selected_indices) < 2:
+                            reply = "⚠️ Debes seleccionar al menos 2 estudios."
+                        else:
+                            reply = "⚠️ Solo puedes seleccionar hasta 6 estudios."
+                        if phone != "0000":
+                            send_unify_selection_prompt(phone, available)
+            else:
+                # Not a uni command, count as invalid attempt
+                attempts = ctx.get("invalid_attempts", 0) + 1
+                if attempts >= 3:
+                    if user_type == "AGENT":
+                        _, interactive_data, menu_ctx, menu_options = build_agent_main_menu(
+                            db, phone, user_record, agent_name, is_active, active_agent
+                        )
+                        session.state = "WAITING_STUDY"
+                        ctx = menu_ctx
+                        greeting = f"¡Hola {agent_name}!" if agent_name else "¡Hola!"
+                        reply = f"🚫 Demasiados intentos inválidos. Volviendo al menú principal.\n\n{greeting} ¿Qué deseas hacer?"
+                        interactive_data = build_interactive_options(
+                            reply, menu_options,
+                            list_button_text="Ver Opciones",
+                            section_title="Estudios Disponibles"
+                        )
+                        ctx["interactive_fallback"] = interactive_data
+                    else:
+                        reply = "🚫 Demasiados intentos inválidos. Volviendo al menú principal."
+                        session.state = "IDLE"
+                        ctx = {}
+                else:
+                    ctx["invalid_attempts"] = attempts
+                    reply = "⚠️ Respuesta no válida. Escribe *uni* seguido de los números de los estudios.\nEjemplo: *uni 1,2,3*"
+                    if phone != "0000":
+                        send_unify_selection_prompt(phone, available)
 
         elif state == "WAITING_ACTION":
             opts_text = "1. Añadir 1 encuesta\n2. Borrar mi última\n3. Ver cuotas actuales"
