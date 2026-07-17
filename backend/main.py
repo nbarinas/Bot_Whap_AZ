@@ -646,8 +646,10 @@ def send_whatsapp_message(to_phone: str, message_text: str):
             "body": message_text
         }
     }
+    print(f"DEBUG send_whatsapp_message: to={to_phone}, len={len(message_text)}, body={message_text[:60]}...")
     try:
         response = requests.post(url, headers=headers, data=json.dumps(data))
+        print(f"DEBUG send_whatsapp_message response status: {response.status_code}, body: {response.text[:200]}")
         resp_json = response.json() if response.status_code == 200 else {}
         msg_id = resp_json.get("messages", [{}])[0].get("id", "unknown")
         
@@ -988,7 +990,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         session.context_data = json.dumps(ctx)
         db.commit()
 
-        opts_text = "\n".join([f"{i+1}. {s}" for i, s in enumerate(study_codes)])
+        opts_text = "\n".join([f"{i+1}. {s[:10]}" for i, s in enumerate(study_codes)])
         reply = f"📊 *Unificar estudios*\n\nSelecciona de 2 a 6 estudios respondiendo con los números separados por comas (ej: 1,3,5):\n\n{opts_text}"
         print(f"DEBUG: sending unify selection reply: {reply[:80]}...")
         if phone != "0000":
@@ -1328,10 +1330,12 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                         session.state = "WAITING_UNIFY_SELECTION"
                         ctx["invalid_attempts"] = 0
                         ctx.pop("study_code", None)
-                        opts = "\n".join([f"{i+1}. {s}" for i, s in enumerate(available)])
+                        opts = "\n".join([f"{i+1}. {s[:10]}" for i, s in enumerate(available)])
                         reply = f"📊 *Unificar estudios*\n\nSelecciona de 2 a 6 estudios respondiendo con los números separados por comas (ej: 1,3,5):\n\n{opts}"
                         print(f"DEBUG: sending unify selection reply: {reply[:80]}...")
-                        return reply, None
+                        if phone != "0000":
+                            send_whatsapp_message(phone, reply)
+                        return None, None
                 elif 1 <= choice <= len(available):
                     study_code = available[choice - 1]
                     ctx["study_code"] = study_code
@@ -2551,6 +2555,7 @@ def get_crm_summary(db_users):
     sql = text("""
         SELECT
             s.name as study_name,
+            COALESCE(u.full_name, u.username, 'Sin encuestador') as interviewer,
             COUNT(*) as total,
             SUM(CASE WHEN c.status = 'pending' THEN 1 ELSE 0 END) as pending,
             SUM(CASE WHEN c.status = 'scheduled' THEN 1 ELSE 0 END) as scheduled,
@@ -2558,9 +2563,10 @@ def get_crm_summary(db_users):
                 AND date(c.realization_date) = :today THEN 1 ELSE 0 END) as effective_today
         FROM calls c
         JOIN studies s ON c.study_id = s.id
+        LEFT JOIN users u ON c.user_id = u.id
         WHERE s.is_active = 1
-        GROUP BY s.id, s.name
-        ORDER BY s.name
+        GROUP BY s.id, s.name, u.id, interviewer
+        ORDER BY s.name, interviewer
     """)
     result = db_users.execute(sql, {"today": today_col}).fetchall()
     summary = []
@@ -2570,6 +2576,7 @@ def get_crm_summary(db_users):
         effective_today = int(row.effective_today or 0)
         summary.append({
             "estudio": row.study_name or "Sin nombre",
+            "encuestador": row.interviewer or "Sin encuestador",
             "total": int(row.total or 0),
             "pendientes": pending,
             "agendados": scheduled,

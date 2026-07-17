@@ -388,7 +388,7 @@ def get_pilot_sections(standard_sections):
 def generate_crm_summary_image(data, output_path="crm_summary_report.png"):
     """
     Renders a compact CRM summary by study.
-    data: list of dicts with keys: estudio, total, pendientes, agendados, faltan, efectivos_hoy
+    data: list of dicts with keys: estudio, encuestador, total, pendientes, agendados, faltan, efectivos_hoy
     """
     PADDING = 30
     CELL_PADDING_H = 12
@@ -426,12 +426,12 @@ def generate_crm_summary_image(data, output_path="crm_summary_report.png"):
     if not bold_font:
         bold_font = title_font = ImageFont.load_default()
 
-    headers = ["Estudio", "Total", "Pendientes", "Agendados", "Faltan", "Efectivos Hoy"]
-    keys = ["estudio", "total", "pendientes", "agendados", "faltan", "efectivos_hoy"]
+    headers = ["Estudio", "Encuestador", "Total", "Pendientes", "Agendados", "Faltan", "Efectivos Hoy"]
+    keys = ["estudio", "encuestador", "total", "pendientes", "agendados", "faltan", "efectivos_hoy"]
     numeric_keys = ["total", "pendientes", "agendados", "faltan", "efectivos_hoy"]
 
     # Prepare totals row
-    totals = {"estudio": "TOTAL", "total": 0, "pendientes": 0, "agendados": 0, "faltan": 0, "efectivos_hoy": 0}
+    totals = {"estudio": "TOTAL", "encuestador": "", "total": 0, "pendientes": 0, "agendados": 0, "faltan": 0, "efectivos_hoy": 0}
     for row in data:
         for k in numeric_keys:
             totals[k] += int(row.get(k, 0) or 0)
@@ -505,7 +505,7 @@ def generate_crm_summary_image(data, output_path="crm_summary_report.png"):
             draw.rectangle([cx, curr_y, cx + cw, curr_y + row_h], fill=cell_bg, outline=BORDER_COLOR)
             vw, vh = get_text_size(val, f)
             # Left align text columns, center numeric columns
-            if key == "estudio":
+            if key in ("estudio", "encuestador"):
                 tx = cx + CELL_PADDING_H
             else:
                 tx = cx + (cw - vw) // 2
