@@ -1046,12 +1046,10 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         ctx = {"available_studies": study_codes, "invalid_attempts": 0}
         session.context_data = json.dumps(ctx)
         db.commit()
+        print(f"DEBUG: session saved to WAITING_UNIFY_SELECTION for {phone}, available={len(study_codes)}")
 
-        print(f"DEBUG: sending unify selection image for {study_codes}")
         if phone != "0000":
-            confirmation = send_unify_selection_prompt(phone, study_codes)
-            if confirmation:
-                send_whatsapp_message(phone, confirmation)
+            send_unify_selection_prompt(phone, study_codes)
         return None, None
             
     # --- DETECCION DE CENSO (TRIGGER) ---
@@ -1340,11 +1338,12 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                         session.state = "WAITING_UNIFY_SELECTION"
                         ctx["invalid_attempts"] = 0
                         ctx.pop("study_code", None)
-                        print(f"DEBUG: sending unify selection image for {available}")
+                        session.context_data = json.dumps(ctx)
+                        db.commit()
+                        print(f"DEBUG: session saved to WAITING_UNIFY_SELECTION for {phone}, available={len(available)}")
+
                         if phone != "0000":
-                            confirmation = send_unify_selection_prompt(phone, available)
-                            if confirmation:
-                                send_whatsapp_message(phone, confirmation)
+                            send_unify_selection_prompt(phone, available)
                         return None, None
                 elif 1 <= choice <= len(available):
                     study_code = available[choice - 1]
@@ -1372,7 +1371,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         elif state == "WAITING_UNIFY_SELECTION":
             available = ctx.get("available_studies", [])
             opts_text = "\n".join([f"{i+1}. {s}" for i, s in enumerate(available)])
-            print(f"DEBUG: WAITING_UNIFY_SELECTION received '{msg}' from {phone}, available={len(available)}")
+            print(f"DEBUG: WAITING_UNIFY_SELECTION received '{msg}' from {phone}, state={session.state}, available={available}")
 
             if msg in ["salir", "cancelar", "0"]:
                 reply = "❌ Operación cancelada. Escribe 'Hola' para empezar de nuevo."
