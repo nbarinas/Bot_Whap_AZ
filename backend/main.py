@@ -1383,9 +1383,13 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
 
                 print(f"DEBUG: parsed selected_indices={selected_indices}")
                 if len(selected_indices) < 2:
-                    reply = f"⚠️ Debes seleccionar al menos 2 estudios.\n\n{opts_text}\n\nResponde con los números separados por comas (ej: 1,3,5) o 'salir' para cancelar."
+                    reply = "⚠️ Debes seleccionar al menos 2 estudios."
+                    if phone != "0000":
+                        send_unify_selection_prompt(phone, available)
                 elif len(selected_indices) > 6:
-                    reply = f"⚠️ Solo puedes seleccionar hasta 6 estudios.\n\n{opts_text}\n\nResponde con los números separados por comas (ej: 1,3,5) o 'salir' para cancelar."
+                    reply = "⚠️ Solo puedes seleccionar hasta 6 estudios."
+                    if phone != "0000":
+                        send_unify_selection_prompt(phone, available)
                 else:
                     selected_codes = [available[i - 1] for i in selected_indices]
                     print(f"DEBUG: generating unified report for {selected_codes}")
