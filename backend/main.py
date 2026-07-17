@@ -934,10 +934,7 @@ def build_agent_main_menu(db, phone, user_record, agent_name, is_active, active_
         crm_idx = validate_idx + 1
         opts += f"\n{crm_idx}. Resumen CRM"
         ctx["crm_summary_option_idx"] = crm_idx
-        if len(study_list) >= 2:
-            unify_idx = crm_idx + 1
-            opts += f"\n{unify_idx}. Unificar estudios"
-            ctx["unify_option_idx"] = unify_idx
+        # Unify is now handled via text command "uni" to avoid session dependency
 
     greeting = f"¡Hola {agent_name}!" if agent_name else "¡Hola!"
     reply = timeout_message + f"{greeting} ¿Qué deseas hacer?"
@@ -945,8 +942,6 @@ def build_agent_main_menu(db, phone, user_record, agent_name, is_active, active_
     menu_options = study_list + ["Validar en base"]
     if is_crm_allowed:
         menu_options.append("Resumen CRM")
-        if len(study_list) >= 2:
-            menu_options.append("Unificar estudios")
     interactive_data = build_interactive_options(
         reply, menu_options,
         list_button_text="Ver Opciones",
@@ -1023,8 +1018,10 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         return None, None
 
     # --- UNIFICAR ESTUDIOS COMMAND (superuser or allowed admin numbers) ---
-    if msg == "unificar estudios" and is_crm_summary_allowed(user_record, phone, normalized_phone):
-        print(f"DEBUG: unificar estudios triggered by {phone}")
+    # Accept any message starting with "uni" (uni, Uni, UNI, etc.) followed by numbers.
+    # Examples: "uni 1,2,3", "Uni 1 2 3", "UNI 1-2-3"
+    if msg.startswith("uni") and is_crm_summary_allowed(user_record, phone, normalized_phone):
+        print(f"DEBUG: uni command triggered by {phone}")
         study_codes = get_bot_active_study_codes(db)
         print(f"DEBUG: active study codes: {study_codes}")
         if len(study_codes) < 2:
@@ -1033,21 +1030,34 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 send_whatsapp_message(phone, reply)
             return None, None
 
-        # Reset session for selection flow
-        session = db.query(models.BotSession).filter(models.BotSession.phone_number == phone).first()
-        if session:
-            db.delete(session)
-            db.commit()
-        session = models.BotSession(phone_number=phone, state="WAITING_UNIFY_SELECTION", context_data="{}")
-        db.add(session)
-        db.commit()
-        db.refresh(session)
+        # Extract numbers from the rest of the message
+        rest = msg[3:].strip()
+        raw_parts = re.split(r'[,\s\-]+', rest)
+        selected_indices = []
+        seen = set()
+        for part in raw_parts:
+            p = part.strip()
+            if p.isdigit():
+                idx = int(p)
+                if 1 <= idx <= len(study_codes) and idx not in seen:
+                    selected_indices.append(idx)
+                    seen.add(idx)
 
-        ctx = {"available_studies": study_codes, "invalid_attempts": 0}
-        session.context_data = json.dumps(ctx)
-        db.commit()
-        print(f"DEBUG: session saved to WAITING_UNIFY_SELECTION for {phone}, available={len(study_codes)}")
+        print(f"DEBUG: uni selected_indices={selected_indices}")
+        if len(selected_indices) < 2:
+            reply = "📭 Debes seleccionar al menos 2 estudios para unificar.\n\n"
+        elif len(selected_indices) > 6:
+            reply = "📭 Solo puedes unificar hasta 6 estudios.\n\n"
+        else:
+            selected_codes = [study_codes[i - 1] for i in selected_indices]
+            print(f"DEBUG: uni generating unified report for {selected_codes}")
+            confirmation = send_unified_studies_report(phone, db, selected_codes)
+            print(f"DEBUG: uni unified report confirmation: {confirmation[:80] if confirmation else 'None'}...")
+            if phone != "0000" and confirmation:
+                send_whatsapp_message(phone, confirmation)
+            return None, None
 
+        # If we reach here, selection was invalid; show help image
         if phone != "0000":
             send_unify_selection_prompt(phone, study_codes)
         return None, None
@@ -1313,13 +1323,10 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             available = ctx.get("available_studies", [])
             validate_idx = ctx.get("validate_option_idx")
             crm_summary_idx = ctx.get("crm_summary_option_idx")
-            unify_idx = ctx.get("unify_option_idx")
             opts_text = "\n".join([f"{i+1}. {s}" for i, s in enumerate(available)])
             opts_text += f"\n{validate_idx}. Validar número en la base" if validate_idx else ""
             if crm_summary_idx:
                 opts_text += f"\n{crm_summary_idx}. Resumen CRM"
-            if unify_idx:
-                opts_text += f"\n{unify_idx}. Unificar estudios"
             try:
                 choice = int(msg)
                 if crm_summary_idx and choice == crm_summary_idx:
@@ -1330,21 +1337,6 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                         db.commit()
                     closing = (confirmation or "") + "\n\nEscribe *hola* para volver al menú."
                     return closing, None
-                elif unify_idx and choice == unify_idx:
-                    print(f"DEBUG: WAITING_STUDY unify selected by {phone}, unify_idx={unify_idx}, available={len(available)}")
-                    if len(available) < 2:
-                        reply, interactive_data, ctx = handle_invalid("No hay suficientes estudios para unificar.", opts_text, ctx.get("interactive_fallback"))
-                    else:
-                        session.state = "WAITING_UNIFY_SELECTION"
-                        ctx["invalid_attempts"] = 0
-                        ctx.pop("study_code", None)
-                        session.context_data = json.dumps(ctx)
-                        db.commit()
-                        print(f"DEBUG: session saved to WAITING_UNIFY_SELECTION for {phone}, available={len(available)}")
-
-                        if phone != "0000":
-                            send_unify_selection_prompt(phone, available)
-                        return None, None
                 elif 1 <= choice <= len(available):
                     study_code = available[choice - 1]
                     ctx["study_code"] = study_code
@@ -1369,66 +1361,10 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 reply, interactive_data, ctx = handle_invalid("Selección inválida.", opts_text, ctx.get("interactive_fallback"))
 
         elif state == "WAITING_UNIFY_SELECTION":
-            available = ctx.get("available_studies", [])
-            opts_text = "\n".join([f"{i+1}. {s}" for i, s in enumerate(available)])
-            print(f"DEBUG: WAITING_UNIFY_SELECTION received '{msg}' from {phone}, state={session.state}, available={available}")
-
-            if msg in ["salir", "cancelar", "0"]:
-                reply = "❌ Operación cancelada. Escribe 'Hola' para empezar de nuevo."
-                session.state = "IDLE"
-                ctx = {}
-            else:
-                # Parse selections separated by comma, space, or dash
-                raw_parts = re.split(r'[,\s\-]+', msg)
-                selected_indices = []
-                seen = set()
-                for part in raw_parts:
-                    p = part.strip()
-                    if p.isdigit():
-                        idx = int(p)
-                        if 1 <= idx <= len(available) and idx not in seen:
-                            selected_indices.append(idx)
-                            seen.add(idx)
-
-                print(f"DEBUG: parsed selected_indices={selected_indices}")
-                attempts = ctx.get("invalid_attempts", 0) + 1
-                if len(selected_indices) < 2 or len(selected_indices) > 6:
-                    if attempts >= 3:
-                        # Too many invalid attempts: return to main menu
-                        if user_type == "AGENT":
-                            _, interactive_data, menu_ctx, menu_options = build_agent_main_menu(
-                                db, phone, user_record, agent_name, is_active, active_agent
-                            )
-                            session.state = "WAITING_STUDY"
-                            ctx = menu_ctx
-                            greeting = f"¡Hola {agent_name}!" if agent_name else "¡Hola!"
-                            reply = f"🚫 Demasiados intentos inválidos. Volviendo al menú principal.\n\n{greeting} ¿Qué deseas hacer?"
-                            interactive_data = build_interactive_options(
-                                reply, menu_options,
-                                list_button_text="Ver Opciones",
-                                section_title="Estudios Disponibles"
-                            )
-                            ctx["interactive_fallback"] = interactive_data
-                        else:
-                            reply = "🚫 Demasiados intentos inválidos. Volviendo al menú principal."
-                            session.state = "IDLE"
-                            ctx = {}
-                    else:
-                        ctx["invalid_attempts"] = attempts
-                        if len(selected_indices) < 2:
-                            reply = "⚠️ Debes seleccionar al menos 2 estudios."
-                        else:
-                            reply = "⚠️ Solo puedes seleccionar hasta 6 estudios."
-                        if phone != "0000":
-                            send_unify_selection_prompt(phone, available)
-                else:
-                    selected_codes = [available[i - 1] for i in selected_indices]
-                    print(f"DEBUG: generating unified report for {selected_codes}")
-                    confirmation = send_unified_studies_report(phone, db, selected_codes)
-                    print(f"DEBUG: unified report confirmation: {confirmation[:80] if confirmation else 'None'}...")
-                    reply = confirmation
-                    session.state = "IDLE"
-                    ctx = {}
+            # Legacy state: direct users to the new "uni" command
+            reply = "📊 Para unificar estudios escribe *uni* seguido de los números de los estudios.\nEjemplo: *uni 1,2,3*"
+            session.state = "IDLE"
+            ctx = {}
 
         elif state == "WAITING_ACTION":
             opts_text = "1. Añadir 1 encuesta\n2. Borrar mi última\n3. Ver cuotas actuales"
