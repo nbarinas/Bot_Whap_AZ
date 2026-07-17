@@ -934,7 +934,10 @@ def build_agent_main_menu(db, phone, user_record, agent_name, is_active, active_
         crm_idx = validate_idx + 1
         opts += f"\n{crm_idx}. Resumen CRM"
         ctx["crm_summary_option_idx"] = crm_idx
-        # Unify is now handled via text command "uni" to avoid session dependency
+        if len(study_list) >= 2:
+            unify_idx = crm_idx + 1
+            opts += f"\n{unify_idx}. Unificar estudios"
+            ctx["unify_option_idx"] = unify_idx
 
     greeting = f"¡Hola {agent_name}!" if agent_name else "¡Hola!"
     reply = timeout_message + f"{greeting} ¿Qué deseas hacer?"
@@ -942,6 +945,8 @@ def build_agent_main_menu(db, phone, user_record, agent_name, is_active, active_
     menu_options = study_list + ["Validar en base"]
     if is_crm_allowed:
         menu_options.append("Resumen CRM")
+        if len(study_list) >= 2:
+            menu_options.append("Unificar estudios")
     interactive_data = build_interactive_options(
         reply, menu_options,
         list_button_text="Ver Opciones",
@@ -1323,10 +1328,13 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             available = ctx.get("available_studies", [])
             validate_idx = ctx.get("validate_option_idx")
             crm_summary_idx = ctx.get("crm_summary_option_idx")
+            unify_idx = ctx.get("unify_option_idx")
             opts_text = "\n".join([f"{i+1}. {s}" for i, s in enumerate(available)])
             opts_text += f"\n{validate_idx}. Validar número en la base" if validate_idx else ""
             if crm_summary_idx:
                 opts_text += f"\n{crm_summary_idx}. Resumen CRM"
+            if unify_idx:
+                opts_text += f"\n{unify_idx}. Unificar estudios"
             try:
                 choice = int(msg)
                 if crm_summary_idx and choice == crm_summary_idx:
@@ -1337,6 +1345,17 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                         db.commit()
                     closing = (confirmation or "") + "\n\nEscribe *hola* para volver al menú."
                     return closing, None
+                elif unify_idx and choice == unify_idx:
+                    print(f"DEBUG: WAITING_STUDY unify help selected by {phone}")
+                    if len(available) < 2:
+                        reply = "📭 No hay suficientes estudios activos para unificar."
+                        if phone != "0000":
+                            send_whatsapp_message(phone, reply)
+                    else:
+                        if phone != "0000":
+                            send_unify_selection_prompt(phone, available)
+                            send_whatsapp_message(phone, "📊 Escribe *uni* seguido de los números de los estudios que quieres unificar.\nEjemplo: *uni 1,2,3*")
+                    return None, None
                 elif 1 <= choice <= len(available):
                     study_code = available[choice - 1]
                     ctx["study_code"] = study_code
