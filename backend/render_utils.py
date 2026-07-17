@@ -520,3 +520,90 @@ def generate_crm_summary_image(data, output_path="crm_summary_report.png"):
 
     img.save(output_path)
     return output_path
+
+
+def generate_unify_selection_image(study_codes, output_path="unify_selection.png"):
+    """
+    Renders a numbered list of studies for the 'unificar estudios' selection step.
+    study_codes: list of study code strings
+    """
+    PADDING = 30
+    LINE_HEIGHT = 32
+    HEADER_BG = (45, 52, 71)
+    HEADER_TEXT = (255, 255, 255)
+    TEXT_COLOR = (60, 64, 67)
+    PRIMARY_LABEL_COLOR = (32, 33, 36)
+    BG_COLOR = (255, 255, 255)
+
+    font, bold_font, title_font, footer_font = None, None, None, None
+    possible_fonts = [
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    ]
+    possible_bolds = [
+        "C:\\Windows\\Fonts\\arialbd.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    ]
+
+    for fp in possible_fonts:
+        if os.path.exists(fp):
+            font = ImageFont.truetype(fp, 16)
+            footer_font = ImageFont.truetype(fp, 12)
+            break
+    for bp in possible_bolds:
+        if os.path.exists(bp):
+            bold_font = ImageFont.truetype(bp, 16)
+            title_font = ImageFont.truetype(bp, 22)
+            break
+
+    if not font:
+        font = footer_font = ImageFont.load_default()
+    if not bold_font:
+        bold_font = title_font = ImageFont.load_default()
+
+    title_text = "UNIFICAR ESTUDIOS"
+    instruction = "Selecciona de 2 a 6 estudios respondiendo con los números separados por comas"
+    example = "Ejemplo: 1,3,5"
+
+    # Calculate image width based on longest line
+    max_w = get_text_size(title_text, title_font)[0]
+    max_w = max(max_w, get_text_size(instruction, font)[0])
+    max_w = max(max_w, get_text_size(example, bold_font)[0])
+    for i, code in enumerate(study_codes):
+        line = f"{i+1}. {code}"
+        max_w = max(max_w, get_text_size(line, font)[0])
+
+    img_w = max(500, max_w + 2 * PADDING)
+    img_h = PADDING + 80 + (len(study_codes) + 3) * LINE_HEIGHT + PADDING + 30
+
+    img = Image.new("RGB", (img_w, img_h), color=BG_COLOR)
+    draw = ImageDraw.Draw(img)
+
+    # Header bar
+    draw.rectangle([0, 0, img_w, 60], fill=HEADER_BG)
+    tw, th = get_text_size(title_text, title_font)
+    draw.text(((img_w - tw) // 2, (60 - th) // 2), title_text, fill=HEADER_TEXT, font=title_font)
+
+    curr_y = 80
+    # Instruction
+    draw.text((PADDING, curr_y), instruction, fill=TEXT_COLOR, font=font)
+    curr_y += LINE_HEIGHT
+    draw.text((PADDING, curr_y), example, fill=PRIMARY_LABEL_COLOR, font=bold_font)
+    curr_y += int(LINE_HEIGHT * 1.5)
+
+    # Numbered list
+    for i, code in enumerate(study_codes):
+        line = f"{i+1}. {code}"
+        draw.text((PADDING, curr_y), line, fill=TEXT_COLOR, font=font)
+        curr_y += LINE_HEIGHT
+
+    # Footer
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    footer = f"AZ Marketing - {timestamp}"
+    fw, _ = get_text_size(footer, footer_font)
+    draw.text(((img_w - fw) // 2, img_h - 25), footer, fill=(128, 128, 128), font=footer_font)
+
+    img.save(output_path)
+    return output_path

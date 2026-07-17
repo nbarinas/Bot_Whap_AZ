@@ -990,11 +990,11 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         session.context_data = json.dumps(ctx)
         db.commit()
 
-        opts_text = "\n".join([f"{i+1}. {s[:10]}" for i, s in enumerate(study_codes)])
-        reply = f"📊 *Unificar estudios*\n\nSelecciona de 2 a 6 estudios respondiendo con los números separados por comas (ej: 1,3,5):\n\n{opts_text}"
-        print(f"DEBUG: sending unify selection reply: {reply[:80]}...")
+        print(f"DEBUG: sending unify selection image for {study_codes}")
         if phone != "0000":
-            send_whatsapp_message(phone, reply)
+            confirmation = send_unify_selection_prompt(phone, study_codes)
+            if confirmation:
+                send_whatsapp_message(phone, confirmation)
         return None, None
             
     # --- DETECCION DE CENSO (TRIGGER) ---
@@ -1330,11 +1330,11 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                         session.state = "WAITING_UNIFY_SELECTION"
                         ctx["invalid_attempts"] = 0
                         ctx.pop("study_code", None)
-                        opts = "\n".join([f"{i+1}. {s[:10]}" for i, s in enumerate(available)])
-                        reply = f"📊 *Unificar estudios*\n\nSelecciona de 2 a 6 estudios respondiendo con los números separados por comas (ej: 1,3,5):\n\n{opts}"
-                        print(f"DEBUG: sending unify selection reply: {reply[:80]}...")
+                        print(f"DEBUG: sending unify selection image for {available}")
                         if phone != "0000":
-                            send_whatsapp_message(phone, reply)
+                            confirmation = send_unify_selection_prompt(phone, available)
+                            if confirmation:
+                                send_whatsapp_message(phone, confirmation)
                         return None, None
                 elif 1 <= choice <= len(available):
                     study_code = available[choice - 1]
@@ -2628,6 +2628,37 @@ def send_crm_summary_report(phone: str, db_users):
     except Exception as e:
         print(f"Error in send_crm_summary_report: {e}")
         return "⚠️ Ocurrió un error generando el resumen del CRM."
+
+
+def send_unify_selection_prompt(phone: str, study_codes: list):
+    """
+    Generates and sends an image with the numbered list of studies available to unify.
+    Returns a short confirmation/error text.
+    """
+    try:
+        if len(study_codes) < 2:
+            return "📭 No hay suficientes estudios activos para unificar."
+
+        img_path = os.path.join(BASE_DIR, f"unify_selection_{datetime.now().strftime('%Y%m%d%H%M%S')}.png")
+        render_utils.generate_unify_selection_image(study_codes, img_path)
+
+        media_id = upload_media.upload_media(img_path, "image/png")
+        try:
+            if os.path.exists(img_path):
+                os.remove(img_path)
+        except Exception:
+            pass
+
+        if not media_id:
+            return "⚠️ No se pudo subir la imagen de selección. Por favor intenta de nuevo."
+
+        caption = "📊 *Selecciona los estudios a unificar*"
+        send_whatsapp_media(phone, "image", media_id, caption)
+
+        return "✅ Te acabo de enviar la lista de estudios para unificar."
+    except Exception as e:
+        print(f"Error in send_unify_selection_prompt: {e}")
+        return "⚠️ Ocurrió un error generando la imagen de selección."
 
 
 def build_study_quota_sections(db, study_code):
