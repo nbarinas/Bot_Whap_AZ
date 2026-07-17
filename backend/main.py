@@ -953,11 +953,19 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
     # --- RESUMEN CRM COMMAND (superuser or allowed admin numbers) ---
     if msg == "resumen crm" and is_crm_summary_allowed(user_record, phone, normalized_phone):
         confirmation = send_crm_summary_report(phone, db_users)
-        return confirmation, None
+        # Clean session so the user can restart the bot cycle normally
+        session = db.query(models.BotSession).filter(models.BotSession.phone_number == phone).first()
+        if session:
+            db.delete(session)
+            db.commit()
+        closing = (confirmation or "") + "\n\nEscribe *hola* para volver al menú."
+        return closing, None
 
     # --- UNIFICAR ESTUDIOS COMMAND (superuser or allowed admin numbers) ---
     if msg == "unificar estudios" and is_crm_summary_allowed(user_record, phone, normalized_phone):
+        print(f"DEBUG: unificar estudios triggered by {phone}")
         study_codes = get_bot_active_study_codes(db)
+        print(f"DEBUG: active study codes: {study_codes}")
         if len(study_codes) < 2:
             return "📭 No hay suficientes estudios activos para unificar (se necesitan al menos 2).", None
 
@@ -977,6 +985,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
 
         opts_text = "\n".join([f"{i+1}. {s}" for i, s in enumerate(study_codes)])
         reply = f"📊 *Unificar estudios*\n\nSelecciona de 2 a 6 estudios respondiendo con los números separados por comas (ej: 1,3,5):\n\n{opts_text}"
+        print(f"DEBUG: sending unify selection reply: {reply[:80]}...")
         return reply, None
             
     # --- DETECCION DE CENSO (TRIGGER) ---
@@ -1235,6 +1244,14 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                         section_title="Estudios Disponibles"
                     )
                     ctx["interactive_fallback"] = interactive_data
+
+                    # If user has admin access, also send a separate text message with the admin commands.
+                    # This avoids the 10-row limit of the WhatsApp interactive list and ensures the commands work.
+                    if is_crm_allowed and phone != "0000":
+                        admin_msg = "🔧 *Opciones de administrador:*\nEscribe *resumen crm* para el resumen de estudios activos."
+                        if len(study_list) >= 2:
+                            admin_msg += "\nEscribe *unificar estudios* para unificar varios estudios en una imagen."
+                        send_whatsapp_message(phone, admin_msg)
                 
             elif user_type == "RESPONDENT":
                 calls_sql = text("SELECT study_id FROM calls WHERE phone_number = :p OR phone_number = :np")
@@ -1297,8 +1314,14 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 choice = int(msg)
                 if crm_summary_idx and choice == crm_summary_idx:
                     confirmation = send_crm_summary_report(phone, db_users)
-                    return confirmation, None
+                    # Clean session so the user can restart the bot cycle normally
+                    if session:
+                        db.delete(session)
+                        db.commit()
+                    closing = (confirmation or "") + "\n\nEscribe *hola* para volver al menú."
+                    return closing, None
                 elif unify_idx and choice == unify_idx:
+                    print(f"DEBUG: WAITING_STUDY unify selected by {phone}, unify_idx={unify_idx}, available={len(available)}")
                     if len(available) < 2:
                         reply, interactive_data, ctx = handle_invalid("No hay suficientes estudios para unificar.", opts_text, ctx.get("interactive_fallback"))
                     else:
@@ -1307,6 +1330,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                         ctx.pop("study_code", None)
                         opts = "\n".join([f"{i+1}. {s}" for i, s in enumerate(available)])
                         reply = f"📊 *Unificar estudios*\n\nSelecciona de 2 a 6 estudios respondiendo con los números separados por comas (ej: 1,3,5):\n\n{opts}"
+                        print(f"DEBUG: sending unify selection reply: {reply[:80]}...")
                         return reply, None
                 elif 1 <= choice <= len(available):
                     study_code = available[choice - 1]
@@ -1334,6 +1358,7 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         elif state == "WAITING_UNIFY_SELECTION":
             available = ctx.get("available_studies", [])
             opts_text = "\n".join([f"{i+1}. {s}" for i, s in enumerate(available)])
+            print(f"DEBUG: WAITING_UNIFY_SELECTION received '{msg}' from {phone}, available={len(available)}")
 
             if msg in ["salir", "cancelar", "0"]:
                 reply = "❌ Operación cancelada. Escribe 'Hola' para empezar de nuevo."
@@ -1352,13 +1377,16 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                             selected_indices.append(idx)
                             seen.add(idx)
 
+                print(f"DEBUG: parsed selected_indices={selected_indices}")
                 if len(selected_indices) < 2:
                     reply = f"⚠️ Debes seleccionar al menos 2 estudios.\n\n{opts_text}\n\nResponde con los números separados por comas (ej: 1,3,5) o 'salir' para cancelar."
                 elif len(selected_indices) > 6:
                     reply = f"⚠️ Solo puedes seleccionar hasta 6 estudios.\n\n{opts_text}\n\nResponde con los números separados por comas (ej: 1,3,5) o 'salir' para cancelar."
                 else:
                     selected_codes = [available[i - 1] for i in selected_indices]
+                    print(f"DEBUG: generating unified report for {selected_codes}")
                     confirmation = send_unified_studies_report(phone, db, selected_codes)
+                    print(f"DEBUG: unified report confirmation: {confirmation[:80] if confirmation else 'None'}...")
                     reply = confirmation
                     session.state = "IDLE"
                     ctx = {}
@@ -2511,41 +2539,42 @@ def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tupl
 
 def get_crm_summary(db_users):
     """
-    Query az_marketing.db for a global summary of active CRM studies,
-    broken down by interviewer (agent).
-    Returns a list of dicts: encuestador, estudio, total, pendientes, agendados, faltan, llevan
+    Query az_marketing.db for a compact summary of active CRM studies.
+    Returns a list of dicts: estudio, total, pendientes, agendados, faltan, efectivos_hoy
     """
     from sqlalchemy import text
+    from datetime import datetime, timedelta
+
+    # Colombia time is UTC-5
+    today_col = (datetime.utcnow() - timedelta(hours=5)).strftime('%Y-%m-%d')
 
     sql = text("""
         SELECT
-            COALESCE(NULLIF(u.full_name, ''), u.username) as agent_name,
             s.name as study_name,
             COUNT(*) as total,
             SUM(CASE WHEN c.status = 'pending' THEN 1 ELSE 0 END) as pending,
             SUM(CASE WHEN c.status = 'scheduled' THEN 1 ELSE 0 END) as scheduled,
-            SUM(CASE WHEN c.status IN ('managed', 'done', 'efectiva_campo') THEN 1 ELSE 0 END) as completed
+            SUM(CASE WHEN c.status IN ('managed', 'done', 'efectiva_campo')
+                AND date(c.realization_date) = :today THEN 1 ELSE 0 END) as effective_today
         FROM calls c
         JOIN studies s ON c.study_id = s.id
-        JOIN users u ON c.user_id = u.id
         WHERE s.is_active = 1 OR s.status = 'open'
-        GROUP BY s.id, s.name, u.id, u.full_name, u.username
-        ORDER BY agent_name, study_name
+        GROUP BY s.id, s.name
+        ORDER BY s.name
     """)
-    result = db_users.execute(sql).fetchall()
+    result = db_users.execute(sql, {"today": today_col}).fetchall()
     summary = []
     for row in result:
         pending = int(row.pending or 0)
         scheduled = int(row.scheduled or 0)
-        completed = int(row.completed or 0)
+        effective_today = int(row.effective_today or 0)
         summary.append({
-            "encuestador": row.agent_name or "Sin nombre",
             "estudio": row.study_name or "Sin nombre",
             "total": int(row.total or 0),
             "pendientes": pending,
             "agendados": scheduled,
             "faltan": pending + scheduled,
-            "llevan": completed
+            "efectivos_hoy": effective_today
         })
     return summary
 

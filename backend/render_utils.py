@@ -387,8 +387,8 @@ def get_pilot_sections(standard_sections):
 
 def generate_crm_summary_image(data, output_path="crm_summary_report.png"):
     """
-    Renders a compact table image for the CRM summary by interviewer.
-    data: list of dicts with keys: encuestador, estudio, total, pendientes, agendados, faltan, llevan
+    Renders a compact CRM summary by study.
+    data: list of dicts with keys: estudio, total, pendientes, agendados, faltan, efectivos_hoy
     """
     PADDING = 30
     CELL_PADDING_H = 12
@@ -401,7 +401,6 @@ def generate_crm_summary_image(data, output_path="crm_summary_report.png"):
     TEXT_COLOR = (60, 64, 67)
     PRIMARY_LABEL_COLOR = (32, 33, 36)
     ACCENT_BG = (239, 246, 255)
-    SUBTOTAL_BG = (226, 232, 240)
     WARN_BG = (255, 251, 235)
     WARN_TEXT = (146, 64, 14)
     OK_BG = (240, 253, 244)
@@ -427,54 +426,16 @@ def generate_crm_summary_image(data, output_path="crm_summary_report.png"):
     if not bold_font:
         bold_font = title_font = ImageFont.load_default()
 
-    headers = ["Encuestador", "Estudio", "Total", "Pendientes", "Agendados", "Faltan", "Llevan"]
-    keys = ["encuestador", "estudio", "total", "pendientes", "agendados", "faltan", "llevan"]
-    numeric_keys = ["total", "pendientes", "agendados", "faltan", "llevan"]
+    headers = ["Estudio", "Total", "Pendientes", "Agendados", "Faltan", "Efectivos Hoy"]
+    keys = ["estudio", "total", "pendientes", "agendados", "faltan", "efectivos_hoy"]
+    numeric_keys = ["total", "pendientes", "agendados", "faltan", "efectivos_hoy"]
 
-    # Build display rows with subtotals per interviewer
-    display_rows = []
-    subtotals = {}
-    global_totals = {"estudio": "TOTAL", "total": 0, "pendientes": 0, "agendados": 0, "faltan": 0, "llevan": 0}
-    current_agent = None
-
+    # Prepare totals row
+    totals = {"estudio": "TOTAL", "total": 0, "pendientes": 0, "agendados": 0, "faltan": 0, "efectivos_hoy": 0}
     for row in data:
-        agent = row.get("encuestador", "Sin nombre")
-        if agent != current_agent:
-            if current_agent is not None:
-                # Add subtotal row for previous agent
-                st = subtotals[current_agent]
-                display_rows.append({
-                    "encuestador": current_agent,
-                    "estudio": "Subtotal",
-                    "total": st["total"],
-                    "pendientes": st["pendientes"],
-                    "agendados": st["agendados"],
-                    "faltan": st["faltan"],
-                    "llevan": st["llevan"],
-                    "is_subtotal": True
-                })
-            current_agent = agent
-            subtotals[current_agent] = {"total": 0, "pendientes": 0, "agendados": 0, "faltan": 0, "llevan": 0}
-        display_rows.append({**row, "is_subtotal": False})
         for k in numeric_keys:
-            subtotals[current_agent][k] += int(row.get(k, 0) or 0)
-            global_totals[k] += int(row.get(k, 0) or 0)
-
-    # Add last subtotal
-    if current_agent is not None:
-        st = subtotals[current_agent]
-        display_rows.append({
-            "encuestador": current_agent,
-            "estudio": "Subtotal",
-            "total": st["total"],
-            "pendientes": st["pendientes"],
-            "agendados": st["agendados"],
-            "faltan": st["faltan"],
-            "llevan": st["llevan"],
-            "is_subtotal": True
-        })
-
-    all_rows = display_rows + [global_totals]
+            totals[k] += int(row.get(k, 0) or 0)
+    all_rows = list(data) + [totals]
 
     # Calculate column widths
     col_widths = []
@@ -484,7 +445,7 @@ def generate_crm_summary_image(data, output_path="crm_summary_report.png"):
         for r in all_rows:
             key = keys[i]
             val = str(r.get(key, ""))
-            is_bold = r.get("is_subtotal") or r.get("estudio") == "TOTAL"
+            is_bold = r.get("estudio") == "TOTAL"
             max_val_w = max(max_val_w, get_text_size(val, bold_font if is_bold else font)[0])
         col_widths.append(max_val_w + 2 * CELL_PADDING_H)
 
@@ -500,7 +461,7 @@ def generate_crm_summary_image(data, output_path="crm_summary_report.png"):
 
     # Title
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    title_text = "RESUMEN CRM - ESTUDIOS ACTIVOS POR ENCUESTADOR"
+    title_text = "RESUMEN CRM - ESTUDIOS ACTIVOS"
     tw, _ = get_text_size(title_text, title_font)
     draw.text(((img_w - tw) // 2, 20), title_text, fill=PRIMARY_LABEL_COLOR, font=title_font)
 
@@ -520,34 +481,31 @@ def generate_crm_summary_image(data, output_path="crm_summary_report.png"):
     # Data rows
     for idx, r in enumerate(all_rows):
         is_total = r.get("estudio") == "TOTAL"
-        is_subtotal = r.get("is_subtotal", False)
         bg = CELL_BG if idx % 2 == 0 else CELL_BG_ALT
         if is_total:
             bg = ACCENT_BG
-        elif is_subtotal:
-            bg = SUBTOTAL_BG
         cx = start_x
         for i, key in enumerate(keys):
             cw = col_widths[i]
             val = str(r.get(key, ""))
-            f = bold_font if is_total or is_subtotal else font
+            f = bold_font if is_total else font
             cell_bg = bg
             text_color = TEXT_COLOR
 
             # Color coding for numeric cells
-            if not is_total and not is_subtotal and key in numeric_keys:
+            if not is_total and key in numeric_keys:
                 num_val = int(r.get(key, 0) or 0)
                 if key in ["pendientes", "agendados", "faltan"] and num_val > 0:
                     cell_bg = WARN_BG
                     text_color = WARN_TEXT
-                elif key == "llevan" and num_val > 0:
+                elif key == "efectivos_hoy" and num_val > 0:
                     cell_bg = OK_BG
                     text_color = OK_TEXT
 
             draw.rectangle([cx, curr_y, cx + cw, curr_y + row_h], fill=cell_bg, outline=BORDER_COLOR)
             vw, vh = get_text_size(val, f)
             # Left align text columns, center numeric columns
-            if key in ["encuestador", "estudio"]:
+            if key == "estudio":
                 tx = cx + CELL_PADDING_H
             else:
                 tx = cx + (cw - vw) // 2
