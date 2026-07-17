@@ -959,7 +959,9 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
             db.delete(session)
             db.commit()
         closing = (confirmation or "") + "\n\nEscribe *hola* para volver al menú."
-        return closing, None
+        if phone != "0000" and closing:
+            send_whatsapp_message(phone, closing)
+        return None, None
 
     # --- UNIFICAR ESTUDIOS COMMAND (superuser or allowed admin numbers) ---
     if msg == "unificar estudios" and is_crm_summary_allowed(user_record, phone, normalized_phone):
@@ -967,7 +969,10 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         study_codes = get_bot_active_study_codes(db)
         print(f"DEBUG: active study codes: {study_codes}")
         if len(study_codes) < 2:
-            return "📭 No hay suficientes estudios activos para unificar (se necesitan al menos 2).", None
+            reply = "📭 No hay suficientes estudios activos para unificar (se necesitan al menos 2)."
+            if phone != "0000":
+                send_whatsapp_message(phone, reply)
+            return None, None
 
         # Reset session for selection flow
         session = db.query(models.BotSession).filter(models.BotSession.phone_number == phone).first()
@@ -986,7 +991,9 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         opts_text = "\n".join([f"{i+1}. {s}" for i, s in enumerate(study_codes)])
         reply = f"📊 *Unificar estudios*\n\nSelecciona de 2 a 6 estudios respondiendo con los números separados por comas (ej: 1,3,5):\n\n{opts_text}"
         print(f"DEBUG: sending unify selection reply: {reply[:80]}...")
-        return reply, None
+        if phone != "0000":
+            send_whatsapp_message(phone, reply)
+        return None, None
             
     # --- DETECCION DE CENSO (TRIGGER) ---
     if user_type == "AGENT" and not media_id:
@@ -1245,13 +1252,6 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     )
                     ctx["interactive_fallback"] = interactive_data
 
-                    # If user has admin access, also send a separate text message with the admin commands.
-                    # This avoids the 10-row limit of the WhatsApp interactive list and ensures the commands work.
-                    if is_crm_allowed and phone != "0000":
-                        admin_msg = "🔧 *Opciones de administrador:*\nEscribe *resumen crm* para el resumen de estudios activos."
-                        if len(study_list) >= 2:
-                            admin_msg += "\nEscribe *unificar estudios* para unificar varios estudios en una imagen."
-                        send_whatsapp_message(phone, admin_msg)
                 
             elif user_type == "RESPONDENT":
                 calls_sql = text("SELECT study_id FROM calls WHERE phone_number = :p OR phone_number = :np")
@@ -1961,11 +1961,11 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
     db.add(log)
     db.commit()
     
-    if phone != "0000":
+    if phone != "0000" and reply:
         if interactive_data:
             # Bug fix: If there is a reply starting with an emoji (warning/error), 
             # send it as a separate text message first so it's not hidden by the interactive menu.
-            if reply and (reply.startswith("⚠️") or reply.startswith("🚫")):
+            if reply.startswith("⚠️") or reply.startswith("🚫"):
                 send_whatsapp_message(phone, reply)
             
             send_whatsapp_interactive(phone, interactive_data)
@@ -2558,7 +2558,7 @@ def get_crm_summary(db_users):
                 AND date(c.realization_date) = :today THEN 1 ELSE 0 END) as effective_today
         FROM calls c
         JOIN studies s ON c.study_id = s.id
-        WHERE s.is_active = 1 OR s.status = 'open'
+        WHERE s.is_active = 1
         GROUP BY s.id, s.name
         ORDER BY s.name
     """)
