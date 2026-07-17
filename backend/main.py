@@ -898,6 +898,63 @@ def set_exclusive_study_subscription(db: Session, phone: str, study_code: str):
     db.commit()
 
 
+def build_agent_main_menu(db, phone, user_record, agent_name, is_active, active_agent, timeout_message=""):
+    """
+    Build the main interactive menu for an AGENT user.
+    Returns (reply_text, interactive_data_dict, ctx_dict, menu_options_list)
+    """
+    studies = db.query(models.BotQuota.study_code).filter(models.BotQuota.is_closed == 0).distinct().all()
+    study_list_all = [s[0] for s in studies]
+
+    study_list = study_list_all
+    if is_active and active_agent and active_agent.assigned_studies:
+        allowed = [s.strip().lower() for s in active_agent.assigned_studies.split(',') if s.strip()]
+        study_list = [s for s in study_list_all if s.lower() in allowed]
+
+    ctx = {}
+    if not study_list:
+        reply = timeout_message + "No hay estudios activos asignados en este momento."
+        ctx["available_studies"] = []
+        ctx["validate_option_idx"] = 1
+        interactive_data = build_interactive_options(reply, ["Validar número"])
+        return reply, interactive_data, ctx, ["Validar número"]
+
+    ctx["available_studies"] = study_list
+    ctx["invalid_attempts"] = 0
+
+    opts = "\n".join([f"{i+1}. {s}" for i, s in enumerate(study_list)])
+    validate_idx = len(study_list) + 1
+    opts += f"\n{validate_idx}. Validar número en la base"
+    ctx["validate_option_idx"] = validate_idx
+    ctx["crm_summary_option_idx"] = None
+    ctx["unify_option_idx"] = None
+
+    is_crm_allowed = is_crm_summary_allowed(user_record, phone, phone[2:] if phone.startswith("57") and len(phone) == 12 else phone)
+    if is_crm_allowed:
+        crm_idx = validate_idx + 1
+        opts += f"\n{crm_idx}. Resumen CRM"
+        ctx["crm_summary_option_idx"] = crm_idx
+        if len(study_list) >= 2:
+            unify_idx = crm_idx + 1
+            opts += f"\n{unify_idx}. Unificar estudios"
+            ctx["unify_option_idx"] = unify_idx
+
+    greeting = f"¡Hola {agent_name}!" if agent_name else "¡Hola!"
+    reply = timeout_message + f"{greeting} ¿Qué deseas hacer?"
+
+    menu_options = study_list + ["Validar en base"]
+    if is_crm_allowed:
+        menu_options.append("Resumen CRM")
+        if len(study_list) >= 2:
+            menu_options.append("Unificar estudios")
+    interactive_data = build_interactive_options(
+        reply, menu_options,
+        list_button_text="Ver Opciones",
+        section_title="Estudios Disponibles"
+    )
+    return reply, interactive_data, ctx, menu_options
+
+
 def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users: Session, media_id: str = None) -> tuple[str, dict]:
     """
     Core bot logic extracted from the simulator so both endpoints can share it.
@@ -1200,59 +1257,12 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 ctx["interactive_fallback"] = interactive_data
             
             elif user_type == "AGENT":
-                # Ask for study
-                studies = db.query(models.BotQuota.study_code).filter(models.BotQuota.is_closed == 0).distinct().all()
-                study_list_all = [s[0] for s in studies]
-                
-                # Filter by assigned studies
-                study_list = study_list_all
-                if is_active and active_agent and active_agent.assigned_studies:
-                    allowed = [s.strip().lower() for s in active_agent.assigned_studies.split(',') if s.strip()]
-                    study_list = [s for s in study_list_all if s.lower() in allowed]
-                
-                if not study_list:
-                    reply = timeout_message + "No hay estudios activos asignados en este momento."
-                    ctx["available_studies"] = []
-                    ctx["validate_option_idx"] = 1
-                    session.state = "WAITING_STUDY"
-                    interactive_data = build_interactive_options(reply, ["Validar número"])
-                    ctx["interactive_fallback"] = interactive_data
-                else:
-                    ctx["available_studies"] = study_list
-                    ctx["invalid_attempts"] = 0
-                    session.state = "WAITING_STUDY"
-                
-                    opts = "\n".join([f"{i+1}. {s}" for i, s in enumerate(study_list)])
-                    validate_idx = len(study_list) + 1
-                    opts += f"\n{validate_idx}. Validar número en la base"
-                    ctx["validate_option_idx"] = validate_idx
-                    ctx["crm_summary_option_idx"] = None
-                    ctx["unify_option_idx"] = None
-
-                    is_crm_allowed = is_crm_summary_allowed(user_record, phone, normalized_phone)
-                    if is_crm_allowed:
-                        crm_idx = validate_idx + 1
-                        opts += f"\n{crm_idx}. Resumen CRM"
-                        ctx["crm_summary_option_idx"] = crm_idx
-                        if len(study_list) >= 2:
-                            unify_idx = crm_idx + 1
-                            opts += f"\n{unify_idx}. Unificar estudios"
-                            ctx["unify_option_idx"] = unify_idx
-                
-                    greeting = f"¡Hola {agent_name}!" if agent_name else "¡Hola!"
-                    reply = timeout_message + f"{greeting} ¿Qué deseas hacer?"
-                
-                    menu_options = study_list + ["Validar en base"]
-                    if is_crm_allowed:
-                        menu_options.append("Resumen CRM")
-                        if len(study_list) >= 2:
-                            menu_options.append("Unificar estudios")
-                    interactive_data = build_interactive_options(
-                        reply, menu_options,
-                        list_button_text="Ver Opciones",
-                        section_title="Estudios Disponibles"
-                    )
-                    ctx["interactive_fallback"] = interactive_data
+                reply, interactive_data, menu_ctx, _ = build_agent_main_menu(
+                    db, phone, user_record, agent_name, is_active, active_agent, timeout_message
+                )
+                session.state = "WAITING_STUDY"
+                ctx.update(menu_ctx)
+                ctx["interactive_fallback"] = interactive_data
 
                 
             elif user_type == "RESPONDENT":
@@ -1382,14 +1392,36 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                             seen.add(idx)
 
                 print(f"DEBUG: parsed selected_indices={selected_indices}")
-                if len(selected_indices) < 2:
-                    reply = "⚠️ Debes seleccionar al menos 2 estudios."
-                    if phone != "0000":
-                        send_unify_selection_prompt(phone, available)
-                elif len(selected_indices) > 6:
-                    reply = "⚠️ Solo puedes seleccionar hasta 6 estudios."
-                    if phone != "0000":
-                        send_unify_selection_prompt(phone, available)
+                attempts = ctx.get("invalid_attempts", 0) + 1
+                if len(selected_indices) < 2 or len(selected_indices) > 6:
+                    if attempts >= 3:
+                        # Too many invalid attempts: return to main menu
+                        if user_type == "AGENT":
+                            _, interactive_data, menu_ctx, menu_options = build_agent_main_menu(
+                                db, phone, user_record, agent_name, is_active, active_agent
+                            )
+                            session.state = "WAITING_STUDY"
+                            ctx = menu_ctx
+                            greeting = f"¡Hola {agent_name}!" if agent_name else "¡Hola!"
+                            reply = f"🚫 Demasiados intentos inválidos. Volviendo al menú principal.\n\n{greeting} ¿Qué deseas hacer?"
+                            interactive_data = build_interactive_options(
+                                reply, menu_options,
+                                list_button_text="Ver Opciones",
+                                section_title="Estudios Disponibles"
+                            )
+                            ctx["interactive_fallback"] = interactive_data
+                        else:
+                            reply = "🚫 Demasiados intentos inválidos. Volviendo al menú principal."
+                            session.state = "IDLE"
+                            ctx = {}
+                    else:
+                        ctx["invalid_attempts"] = attempts
+                        if len(selected_indices) < 2:
+                            reply = "⚠️ Debes seleccionar al menos 2 estudios."
+                        else:
+                            reply = "⚠️ Solo puedes seleccionar hasta 6 estudios."
+                        if phone != "0000":
+                            send_unify_selection_prompt(phone, available)
                 else:
                     selected_codes = [available[i - 1] for i in selected_indices]
                     print(f"DEBUG: generating unified report for {selected_codes}")
