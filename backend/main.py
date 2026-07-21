@@ -1624,49 +1624,36 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 quota_ids = ctx.get("free_text_quota_ids", [])
                 if not quota_ids and ctx.get("free_text_quota_id"):
                     quota_ids = [ctx.get("free_text_quota_id")]
-                
+
                 if quota_ids:
                     interviewer = ctx.get("free_text_name", "no tiene")
-
                     study_code = ctx.get("study_code")
-                    labels = []
-                    for q_id in quota_ids:
-                        quota = db.query(models.BotQuota).get(q_id)
-                        if quota:
-                            # Validar si la cuota ya está llena
-                            if quota.current_count >= quota.target_count and not ctx.get("is_overquota_allowed"):
-                                q_label = f"{quota.category} | {quota.value}" if (quota.category and quota.category != "General") else quota.value
-                                reply = f"❌ La cuota *{q_label}* ya está llena ({quota.current_count}/{quota.target_count}).\n\nSi realmente necesitas agregarla, por favor escribe a Armando."
-                                session.state = "IDLE"
-                                # Limpiar flags temporales pero mantener el resto del contexto (como study_code)
-                                ctx.pop("is_overquota_allowed", None)
-                                ctx.pop("free_text_quota_ids", None)
-                                session.context_data = json.dumps(ctx)
-                                db.commit()
-                                send_whatsapp_message(phone, reply)
-                                return reply, None
 
-                            sub = models.QuotaSubmission(
-                                bot_quota_id=quota.id,
-                                phone_number=phone,
-                                is_deleted=0,
-                                interviewer_name=interviewer
-                            )
-                            db.add(sub)
-                            quota.current_count += 1
-                            q_label = f"{quota.category} | {quota.value}" if (quota.category and quota.category != "General") else quota.value
-                            labels.append(f"{q_label} ({quota.target_count - quota.current_count} faltantes)")
+                    # Guardar atómicamente: si alguna cuota está llena no se crea nada
+                    err_msg, labels = validate_and_save_quotas(
+                        db, quota_ids, ctx, phone, study_code,
+                        sender_label=sender_label, interviewer_name=interviewer
+                    )
+                    if err_msg:
+                        session.state = "IDLE"
+                        # Limpiar flags temporales pero mantener el resto del contexto (como study_code)
+                        ctx.pop("is_overquota_allowed", None)
+                        ctx.pop("free_text_quota_ids", None)
+                        session.context_data = json.dumps(ctx)
+                        db.commit()
+                        send_whatsapp_message(phone, err_msg)
+                        return err_msg, None
 
                     # Ensure they are subscribed to this study now (latest interaction)
                     set_exclusive_study_subscription(db, phone, study_code)
-                    
+
                     active_phones = get_daily_active_phones_for_study(db, study_code)
                     if phone not in active_phones:
                         active_phones.append(phone)
-                        
+
                     summary_str = "\n• ".join(labels)
                     send_quota_report_to_agents(db, study_code, active_phones, f"📈 ¡Nueva encuesta guardada por *{sender_label}* en:\n• {summary_str}")
-                    
+
                     reply = f"✅ ¡Guardado con éxito en {len(labels)} cuotas!"
                 else:
                     reply = "⚠️ Error: No se encontraron las cuotas en la base de datos."
@@ -2477,6 +2464,47 @@ def check_free_text_quota(db, study_code: str, msg: str):
     return results, name_found, ""
 
 
+def validate_and_save_quotas(db, quota_ids, ctx, phone, study_code, sender_label=None, interviewer_name=None):
+    """
+    Valida que todas las cuotas estén disponibles y, si es así, crea las
+    submissions y aumenta los contadores de forma atómica.
+    Devuelve (error_message, labels). Si error_message no es None, no se
+    creó ninguna submission ni se incrementó ningún contador.
+    """
+    quotas = []
+    for q_id in quota_ids:
+        q = db.query(models.BotQuota).get(q_id)
+        if q:
+            quotas.append(q)
+
+    # Pre-validación: abortar si alguna cuota está llena
+    for q in quotas:
+        if q.current_count >= q.target_count and not ctx.get("is_overquota_allowed"):
+            q_label = f"{q.category} | {q.value}" if (q.category and q.category != "General") else q.value
+            return (
+                f"❌ La cuota *{q_label}* ya está llena ({q.current_count}/{q.target_count}).\n\n"
+                "Si realmente necesitas agregarla, por favor escribe a Armando."
+            ), None
+
+    # Todas disponibles: guardar
+    labels = []
+    for q in quotas:
+        kwargs = {
+            "bot_quota_id": q.id,
+            "phone_number": phone,
+            "is_deleted": 0
+        }
+        if interviewer_name:
+            kwargs["interviewer_name"] = interviewer_name
+        sub = models.QuotaSubmission(**kwargs)
+        db.add(sub)
+        q.current_count += 1
+        q_label = f"{q.category} | {q.value}" if (q.category and q.category != "General") else q.value
+        labels.append(f"{q_label} ({q.target_count - q.current_count} faltantes)")
+
+    return None, labels
+
+
 def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tuple[str, str, dict]:
 
     study_code = ctx["study_code"]
@@ -2528,48 +2556,44 @@ def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tupl
         quota = quota_map[exact_path]
         
         if quota.id not in pending_ids:
+            # Validar la cuota antes de agregarla; si está llena, seguir en el
+            # mismo menú para que elija otra opción.
+            if quota.current_count >= quota.target_count and not ctx.get("is_overquota_allowed"):
+                q_label = f"{quota.category} | {quota.value}" if (quota.category and quota.category != "General") else quota.value
+                err_msg = (
+                    f"❌ La cuota *{q_label}* ya está llena ({quota.current_count}/{quota.target_count}).\n\n"
+                    "Si realmente necesitas agregarla, por favor escribe a Armando."
+                )
+                return err_msg, "WAITING_CATEGORY", ctx.get("interactive_fallback")
             pending_ids.append(quota.id)
         ctx["interactive_quota_ids"] = pending_ids
-        
+
         # Re-evaluate fulfillment
         fulfilled_pt = any(q.category == "Tipo de Punto" for q in all_quotas if q.id in pending_ids)
         fulfilled_std = any(q.category != "Tipo de Punto" and not q.value.startswith("Censos") for q in all_quotas if q.id in pending_ids)
-        
+
         if (has_pt and not fulfilled_pt) or (has_std and not fulfilled_std):
             ctx["selected_path"] = []
             reply_text, next_state, next_interactive = compute_next_bot_step_interactive(db, ctx, phone, sender_name)
-            
+
             prefix_msg = "✅ Dato temporal guardado. Ahora completa lo que falta:"
             if "Selecciona una opción:" in reply_text:
                 reply_text = reply_text.replace("Selecciona una opción:", f"{prefix_msg}\n\nSelecciona una opción:")
             elif "*Modo rápido*" in reply_text:
                 reply_text = f"{prefix_msg}\n\nSelecciona una opción:"
-            
+
             if next_interactive and "body" in next_interactive:
                 next_interactive["body"]["text"] = reply_text
-                
+
             return reply_text, next_state, next_interactive
 
-        # We have all required quotas! Save them!
-        labels = []
-        for q_id in pending_ids:
-            q = db.query(models.BotQuota).get(q_id)
-            
-            # Validar si la cuota ya está llena
-            if q.current_count >= q.target_count and not ctx.get("is_overquota_allowed"):
-                q_label = f"{q.category} | {q.value}" if (q.category and q.category != "General") else q.value
-                return f"❌ La cuota *{q_label}* ya está llena ({q.current_count}/{q.target_count}).\n\nSi realmente necesitas agregarla, por favor escribe a Armando.", "IDLE", None
+        # We have all required quotas! Save them atomically
+        err_msg, labels = validate_and_save_quotas(
+            db, pending_ids, ctx, phone, study_code, sender_label=sender_name
+        )
+        if err_msg:
+            return err_msg, "IDLE", None
 
-            sub = models.QuotaSubmission(
-                bot_quota_id=q.id,
-                phone_number=phone,
-                is_deleted=0
-            )
-            db.add(sub)
-            q.current_count += 1
-            q_label = f"{q.category} | {q.value}" if (q.category and q.category != "General") else q.value
-            labels.append(f"{q_label} ({q.target_count - q.current_count} faltantes)")
-            
         set_exclusive_study_subscription(db, phone, study_code)
         
         active_phones = get_daily_active_phones_for_study(db, study_code)
