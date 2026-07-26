@@ -911,13 +911,21 @@ def build_agent_main_menu(db, phone, user_record, agent_name, is_active, active_
         allowed = [s.strip().lower() for s in active_agent.assigned_studies.split(',') if s.strip()]
         study_list = [s for s in study_list_all if s.lower() in allowed]
 
+    is_crm_allowed = is_crm_summary_allowed(user_record, phone, phone[2:] if phone.startswith("57") and len(phone) == 12 else phone)
+
     ctx = {}
     if not study_list:
         reply = timeout_message + "No hay estudios activos asignados en este momento."
         ctx["available_studies"] = []
         ctx["validate_option_idx"] = 1
-        interactive_data = build_interactive_options(reply, ["Validar número"])
-        return reply, interactive_data, ctx, ["Validar número"]
+        ctx["crm_summary_option_idx"] = None
+        ctx["unify_option_idx"] = None
+        menu_options = ["Validar número"]
+        if is_crm_allowed:
+            ctx["crm_summary_option_idx"] = 2
+            menu_options.append("Resumen CRM")
+        interactive_data = build_interactive_options(reply, menu_options)
+        return reply, interactive_data, ctx, menu_options
 
     ctx["available_studies"] = study_list
     ctx["invalid_attempts"] = 0
@@ -929,7 +937,6 @@ def build_agent_main_menu(db, phone, user_record, agent_name, is_active, active_
     ctx["crm_summary_option_idx"] = None
     ctx["unify_option_idx"] = None
 
-    is_crm_allowed = is_crm_summary_allowed(user_record, phone, phone[2:] if phone.startswith("57") and len(phone) == 12 else phone)
     if is_crm_allowed:
         crm_idx = validate_idx + 1
         opts += f"\n{crm_idx}. Resumen CRM"
