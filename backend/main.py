@@ -2428,10 +2428,13 @@ def check_free_text_quota(db, study_code: str, msg: str):
     
     for q in quotas:
         is_pt = (q.category == "Tipo de Punto")
+        is_exa = (q.category == "Exacta")
         if q.category == "General" and not q.value.startswith("Censos"):
              parts = [q.value.lower().strip()]
         elif is_pt:
              parts = [q.value.lower().strip()]
+        elif is_exa:
+             parts = [(q.point_type or q.value).lower().strip()]
         else:
              cat_part = q.category if q.category else ""
              parts = [x.strip().lower() for x in cat_part.split("|") if x.strip() and x.strip().lower() not in ["región", "region"]] + [q.value.lower().strip()]
@@ -2553,25 +2556,37 @@ def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tupl
     selected_path = ctx.get("selected_path", [])
     pending_ids = ctx.get("interactive_quota_ids", [])
     
-    all_quotas = db.query(models.BotQuota).filter(
+    all_study_quotas = db.query(models.BotQuota).filter(
         models.BotQuota.study_code == study_code,
-        models.BotQuota.category != "Exacta"
+        ~models.BotQuota.value.startswith("Censos")
     ).all()
-    
+
+    if not all_study_quotas:
+        return (
+            f"📊 No se encontraron cuotas para *{study_code.upper()}*.",
+            "IDLE", None
+        )
+
     # Determine what categories we still need to fulfill
-    has_pt = any(q.category == "Tipo de Punto" for q in all_quotas)
-    has_std = any(q.category != "Tipo de Punto" and not q.value.startswith("Censos") for q in all_quotas)
+    has_pt = any(q.category == "Tipo de Punto" for q in all_study_quotas)
+    has_std = any(q.category not in ("Tipo de Punto", "Exacta") and not q.value.startswith("Censos") for q in all_study_quotas)
+    has_exa = any(q.category == "Exacta" for q in all_study_quotas)
     
-    fulfilled_pt = any(q.category == "Tipo de Punto" for q in all_quotas if q.id in pending_ids)
-    fulfilled_std = any(q.category != "Tipo de Punto" and not q.value.startswith("Censos") for q in all_quotas if q.id in pending_ids)
+    fulfilled_pt = any(q.category == "Tipo de Punto" for q in all_study_quotas if q.id in pending_ids)
+    fulfilled_std = any(q.category not in ("Tipo de Punto", "Exacta") and not q.value.startswith("Censos") for q in all_study_quotas if q.id in pending_ids)
+    fulfilled_exa = any(q.category == "Exacta" for q in all_study_quotas if q.id in pending_ids)
     
     quotas = []
-    for q in all_quotas:
-        is_pt = (q.category == "Tipo de Punto")
-        if is_pt and not fulfilled_pt:
-            quotas.append(q)
-        elif not is_pt and not fulfilled_std:
-            quotas.append(q)
+    for q in all_study_quotas:
+        if q.category == "Exacta":
+            if not fulfilled_exa:
+                quotas.append(q)
+        elif q.category == "Tipo de Punto":
+            if not fulfilled_pt:
+                quotas.append(q)
+        elif not q.value.startswith("Censos"):
+            if not fulfilled_std:
+                quotas.append(q)
             
     if not quotas:
         return "⚠️ No hay cuotas disponibles o ya terminaste.", "IDLE", None
@@ -2580,7 +2595,10 @@ def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tupl
     valid_paths = []
     quota_map = {}
     for q in quotas:
-        if q.category == "General":
+        if q.category == "Exacta":
+            col_part = q.value.split(" | ", 1)[1] if " | " in q.value else q.value
+            parts = [q.category, q.point_type or "General", col_part]
+        elif q.category == "General":
             parts = [q.value]
         else:
             parts = [x.strip() for x in q.category.split("|")] + [q.value.strip()]
@@ -2614,10 +2632,11 @@ def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tupl
         ctx["interactive_quota_ids"] = pending_ids
 
         # Re-evaluate fulfillment
-        fulfilled_pt = any(q.category == "Tipo de Punto" for q in all_quotas if q.id in pending_ids)
-        fulfilled_std = any(q.category != "Tipo de Punto" and not q.value.startswith("Censos") for q in all_quotas if q.id in pending_ids)
+        fulfilled_pt = any(q.category == "Tipo de Punto" for q in all_study_quotas if q.id in pending_ids)
+        fulfilled_std = any(q.category not in ("Tipo de Punto", "Exacta") and not q.value.startswith("Censos") for q in all_study_quotas if q.id in pending_ids)
+        fulfilled_exa = any(q.category == "Exacta" for q in all_study_quotas if q.id in pending_ids)
 
-        if (has_pt and not fulfilled_pt) or (has_std and not fulfilled_std):
+        if (has_pt and not fulfilled_pt) or (has_std and not fulfilled_std) or (has_exa and not fulfilled_exa):
             ctx["selected_path"] = []
             reply_text, next_state, next_interactive = compute_next_bot_step_interactive(db, ctx, phone, sender_name)
 
@@ -2670,6 +2689,7 @@ def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tupl
     
     # Detect if current phase is point type (always use list for it)
     is_current_phase_pt = len(quotas) > 0 and any(q.category == "Tipo de Punto" for q in quotas)
+    is_current_phase_exa = len(quotas) > 0 and any(q.category == "Exacta" for q in quotas)
     
     ctx["current_options"] = next_options
     if depth == 0:
@@ -2680,11 +2700,9 @@ def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tupl
     else:
         reply = "Selecciona una opción:"
     
-    # Use buttons for 3 or fewer options (faster, one tap), except point type
-    # Use list for 4+ options or for point type (can have many options)
     interactive_data = build_interactive_options(
         reply, next_options,
-        force_list=is_current_phase_pt,
+        force_list=is_current_phase_pt or is_current_phase_exa,
         list_button_text="Seleccionar",
         section_title="Categorías"
     )
