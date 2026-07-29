@@ -972,6 +972,176 @@ async function uploadTdc() {
     finally { btn.disabled = false; btn.innerText = 'Cargar y Crear'; }
 }
 
+// ============================================================
+// EXACTA MODULE - Cuotas exactas por Punto × NSE
+// ============================================================
+
+let exactaPoints = [
+    "Centro Comercial", "Iglesia", "Parque",
+    "Plaza/Plazoleta", "Zona Comercial", "Colegio/Universidad"
+];
+let exactaNses = ["Estrato 2", "Estrato 3", "Estrato 4"];
+
+function openExactaModal() {
+    const modal = document.getElementById('exactaModal');
+    if (modal) modal.style.display = 'flex';
+    document.getElementById('exactaStudyCode').value = '';
+    document.getElementById('exactaErrorMsg').style.display = 'none';
+    exactaPoints = [
+        "Centro Comercial", "Iglesia", "Parque",
+        "Plaza/Plazoleta", "Zona Comercial", "Colegio/Universidad"
+    ];
+    exactaNses = ["Estrato 2", "Estrato 3", "Estrato 4"];
+    renderExactaTable();
+}
+
+function closeExactaModal() {
+    document.getElementById('exactaModal').style.display = 'none';
+}
+
+function renderExactaTable() {
+    const container = document.getElementById('exactaTableContainer');
+    if (!container) return;
+
+    if (exactaPoints.length === 0 || exactaNses.length === 0) {
+        container.innerHTML = '<p style="text-align:center; color:var(--text-muted); padding:1rem;">Agrega al menos un punto y un NSE para empezar.</p>';
+        return;
+    }
+
+    let html = '<div class="htable-container" style="border-width:2px; border-color:#f59e0b;">';
+    html += '<div class="htable-root-groups"><div class="htable-group">';
+    html += '<div class="htable-cols-container">';
+
+    html += '<div class="htable-cols-row header-row">';
+    html += '<div style="min-width:150px; font-weight:800;">Punto</div>';
+    exactaNses.forEach((nse, ni) => {
+        html += `<div>${nse} <span onclick="removeExactaNse(${ni})" style="cursor:pointer; color:#ef4444; font-size:1.2rem; font-weight:bold;" title="Eliminar NSE">&times;</span></div>`;
+    });
+    html += '</div>';
+
+    exactaPoints.forEach((point, pi) => {
+        html += '<div class="htable-cols-row body-row">';
+        html += `<div style="font-weight:700; text-align:center; display:flex; align-items:center; justify-content:center; gap:4px;">
+            <input type="text" class="exacta-point-name" value="${point.replace(/"/g, '&quot;')}" data-idx="${pi}" style="width:100%; border:none; background:transparent; font-weight:700; text-align:center; font-family:inherit; font-size:0.9rem;">
+            <span onclick="removeExactaPoint(${pi})" style="cursor:pointer; color:#ef4444; font-size:1.2rem; font-weight:bold;" title="Eliminar punto">&times;</span>
+        </div>`;
+        exactaNses.forEach((nse, ni) => {
+            html += `<div><input type="number" class="htable-input exacta-cell" data-pi="${pi}" data-ni="${ni}" min="0" placeholder="0"></div>`;
+        });
+        html += '</div>';
+    });
+
+    html += '</div></div></div></div>';
+    container.innerHTML = html;
+
+    document.querySelectorAll('.exacta-point-name').forEach(input => {
+        input.addEventListener('change', function() {
+            const idx = parseInt(this.dataset.idx, 10);
+            if (this.value.trim() === '') this.value = exactaPoints[idx];
+            else exactaPoints[idx] = this.value.trim();
+        });
+    });
+}
+
+function addExactaPoint() {
+    exactaPoints.push("Nuevo punto");
+    renderExactaTable();
+    const inputs = document.querySelectorAll('.exacta-point-name');
+    if (inputs.length > 0) inputs[inputs.length - 1].focus();
+}
+
+function addExactaNse() {
+    exactaNses.push("Nuevo NSE");
+    renderExactaTable();
+}
+
+function removeExactaPoint(idx) {
+    if (!confirm(`¿Eliminar "${exactaPoints[idx]}" y todas sus celdas?`)) return;
+    exactaPoints.splice(idx, 1);
+    renderExactaTable();
+}
+
+function removeExactaNse(idx) {
+    if (!confirm(`¿Eliminar "${exactaNses[idx]}" de todas las filas?`)) return;
+    exactaNses.splice(idx, 1);
+    renderExactaTable();
+}
+
+async function saveExactaQuotas() {
+    const studyCode = document.getElementById('exactaStudyCode').value.trim();
+    const errorMsg = document.getElementById('exactaErrorMsg');
+
+    if (!studyCode) {
+        errorMsg.innerText = "Ingresa el ID del estudio";
+        errorMsg.style.display = 'block';
+        return;
+    }
+
+    const pointInputs = document.querySelectorAll('.exacta-point-name');
+    const currentPoints = [];
+    pointInputs.forEach(input => {
+        const val = input.value.trim();
+        if (val) currentPoints.push(val);
+    });
+
+    if (currentPoints.length === 0) {
+        errorMsg.innerText = "Debes tener al menos un punto";
+        errorMsg.style.display = 'block';
+        return;
+    }
+
+    const payload = [];
+    let hasValues = false;
+
+    document.querySelectorAll('.exacta-cell').forEach(input => {
+        const pi = parseInt(input.dataset.pi, 10);
+        const ni = parseInt(input.dataset.ni, 10);
+        const point = currentPoints[pi];
+        const nse = exactaNses[ni];
+        const val = parseInt(input.value, 10);
+
+        if (!point || !nse) return;
+        if (isNaN(val) || val <= 0) return;
+
+        hasValues = true;
+        payload.push({
+            study_code: studyCode,
+            category: "Tipo de Punto",
+            value: point + " | " + nse,
+            target_count: val,
+            point_type: point
+        });
+    });
+
+    if (!hasValues) {
+        errorMsg.innerText = "Ingresa al menos un valor mayor a 0 en alguna celda";
+        errorMsg.style.display = 'block';
+        return;
+    }
+
+    errorMsg.style.display = 'none';
+
+    try {
+        const res = await fetchWithAuth('/api/quotas/batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+            closeExactaModal();
+            loadQuotas();
+        } else {
+            const data = await res.json().catch(() => ({}));
+            errorMsg.innerText = "Error: " + (data.detail || 'Error al guardar');
+            errorMsg.style.display = 'block';
+        }
+    } catch (e) {
+        console.error(e);
+        errorMsg.innerText = "Error de conexi\u00f3n";
+        errorMsg.style.display = 'block';
+    }
+}
+
 function renderTdcGridHtml(quotas) {
     const sorted = [...quotas].sort((a, b) => (a.store_id || 0) - (b.store_id || 0));
     const COLS = 5;

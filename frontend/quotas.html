@@ -432,6 +432,7 @@
                 <button class="btn-primary" onclick="openAgentsModal()" style="background:#0ea5e9;"><i class="fas fa-users"></i> Encuestadores</button>
                 <button class="btn-primary" onclick="openTdcModal()" style="background:#8b5cf6;"><i class="fas fa-store"></i> Nuevo TDC</button>
                 <button class="btn-primary" onclick="openModal()">+ Configurar Estudio</button>
+                <button class="btn-primary" onclick="openExactaModal()" style="background:#f59e0b;"><i class="fas fa-bullseye"></i> Exacta</button>
                 <button onclick="logout()"
                     style="background:var(--danger); color:white; border:none; padding:1rem; border-radius:12px; cursor:pointer; font-weight:700;"><i
                         class="fas fa-sign-out-alt"></i> Salir</button>
@@ -605,6 +606,31 @@
             <div class="modal-footer">
                 <button onclick="closeTdcModal()" class="btn-cancel">Cerrar</button>
                 <button onclick="uploadTdc()" class="btn-primary" id="btnUploadTdc" style="background:#8b5cf6;">Cargar y Crear</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Exacta Modal -->
+    <div id="exactaModal" class="modal">
+        <div class="modal-content" style="max-width: 800px;">
+            <h2 style="margin:0 0 1rem 0; font-size:1.5rem; font-weight:800; text-align:center; color:#f59e0b;">
+                <i class="fas fa-bullseye"></i> Cuota Exacta por Punto &times; NSE
+            </h2>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Estudio ID</label>
+                    <input type="text" id="exactaStudyCode" placeholder="Ej: 1542" required>
+                </div>
+                <div id="exactaTableContainer"></div>
+                <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
+                    <button onclick="addExactaPoint()" style="flex:1; min-width:120px; background:white; border:2px dashed #f59e0b; color:#f59e0b; padding:8px 12px; border-radius:8px; cursor:pointer; font-weight:700;"><i class="fas fa-plus"></i> A&ntilde;adir punto</button>
+                    <button onclick="addExactaNse()" style="flex:1; min-width:120px; background:white; border:2px dashed #f59e0b; color:#f59e0b; padding:8px 12px; border-radius:8px; cursor:pointer; font-weight:700;"><i class="fas fa-plus"></i> A&ntilde;adir NSE</button>
+                </div>
+                <p id="exactaErrorMsg" style="color:#ef4444; display:none; font-weight:700; text-align:center; margin-top:10px;"></p>
+            </div>
+            <div class="modal-footer">
+                <button onclick="closeExactaModal()" class="btn-cancel">Cerrar</button>
+                <button onclick="saveExactaQuotas()" class="btn-primary" style="background:#f59e0b;">Guardar Cuotas Exactas</button>
             </div>
         </div>
     </div>
