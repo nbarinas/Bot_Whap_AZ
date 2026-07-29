@@ -1096,11 +1096,14 @@ function renderGrid() {
     h += '<div class="htable-cols-row header-row">';
     h += '<div style="min-width:150px;font-weight:800;">Punto</div>';
     visible.forEach(col => {
-        h += '<div>';
-        col.parts.forEach((p, pi) => {
-            h += '<div style="' + (pi > 0 ? 'font-size:0.75rem;color:var(--text-muted);' : '') + '">' + p + '</div>';
-        });
-        h += '<span onclick="exaHideCol(this)" data-col="' + encodeURIComponent(col.label) + '" style="cursor:pointer;color:#ef4444;font-size:1rem;font-weight:bold;">&times;</span></div>';
+        const first = col.parts[0];
+        const rest = col.parts.slice(1);
+        let labelHtml = '<span style="font-weight:800;">' + first + '</span>';
+        if (rest.length > 0) {
+            labelHtml += ' <span style="color:#334155;font-size:0.75rem;">' + rest.join(' \u00b7 ') + '</span>';
+        }
+        h += '<div style="white-space:nowrap;">' + labelHtml;
+        h += ' <span onclick="exaHideCol(this)" data-col="' + encodeURIComponent(col.label) + '" style="cursor:pointer;color:#ef4444;font-weight:bold;">&times;</span></div>';
     });
     h += '</div>';
 
