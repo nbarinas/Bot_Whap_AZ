@@ -1063,22 +1063,25 @@ function exaRemoveVal(di, vi) {
 function renderExactaGrid() {
     const container = document.getElementById('exactaTableContainer');
     if (!container) return;
-    const allCols = getExactaCols();
-    const visible = allCols.filter(c => !exactaDeletedCols.has(c.label));
-    if (exactaEPoints.length === 0 || allCols.length === 0) {
+    const active = exactaColDims.filter(d => d.enabled);
+    if (exactaEPoints.length === 0 || active.length === 0) {
         container.innerHTML = '<p style="text-align:center;color:var(--text-muted);padding:1rem;">Agrega filas y columnas.</p>'; return;
     }
-    if (visible.length === 0) {
+    const colDim = active[0];
+    const cols = colDim.values.filter(v => !exactaDeletedCols.has(v));
+    if (cols.length === 0) {
         container.innerHTML = '<p style="text-align:center;color:var(--text-muted);padding:1rem;">Columnas ocultas.</p>'; return;
     }
+    const innerDims = active.slice(1);
+    let innerCombos = [[]];
+    innerDims.forEach(d => { innerCombos = innerCombos.flatMap(c => d.values.map(v => [...c, v])); });
+    const innerLabels = innerCombos.length === 1 && innerCombos[0].length === 0 ? [] : innerCombos.map(combo => combo.join(" \u00b7 "));
+
     let h = '<div class="htable-container" style="border-width:2px;border-color:#f59e0b;"><div class="htable-root-groups"><div class="htable-group"><div class="htable-cols-container">';
     h += '<div class="htable-cols-row header-row">';
     h += '<div style="min-width:150px;font-weight:800;">Punto</div>';
-    visible.forEach(col => {
-        const first = col.parts[0], rest = col.parts.slice(1);
-        let l = '<span style="font-weight:800;">' + first + '</span>';
-        if (rest.length > 0) l += ' <span style="color:#334155;font-size:0.75rem;">' + rest.join(' \u00b7 ') + '</span>';
-        h += '<div style="white-space:nowrap;">' + l + ' <span onclick="exaHideCol(this)" data-col="' + encodeURIComponent(col.label) + '" style="cursor:pointer;color:#ef4444;font-weight:bold;">&times;</span></div>';
+    cols.forEach(col => {
+        h += '<div style="white-space:nowrap;text-align:center;font-weight:700;">' + col + ' <span onclick="exaHideCol(this)" data-col="' + encodeURIComponent(col) + '" style="cursor:pointer;color:#ef4444;font-weight:bold;">&times;</span></div>';
     });
     h += '</div>';
     exactaEPoints.forEach((row, ri) => {
@@ -1086,8 +1089,20 @@ function renderExactaGrid() {
         h += '<div style="font-weight:700;text-align:center;display:flex;align-items:center;justify-content:center;gap:4px;">';
         h += '<input type="text" class="exa-row-inp" value="' + row.replace(/"/g, '&quot;') + '" data-ri="' + ri + '" style="width:100%;border:none;background:transparent;font-weight:700;text-align:center;font-family:inherit;font-size:0.9rem;">';
         h += '<span onclick="exaRemoveRow(' + ri + ')" style="cursor:pointer;color:#ef4444;font-size:1.2rem;font-weight:bold;">&times;</span></div>';
-        visible.forEach(col => {
-            h += '<div><input type="number" class="htable-input exa-cell" data-ri="' + ri + '" data-col="' + encodeURIComponent(col.label) + '" min="0" placeholder="0"></div>';
+        cols.forEach(col => {
+            h += '<div style="display:flex;flex-direction:column;gap:2px;padding:2px 4px;">';
+            if (innerLabels.length === 0) {
+                h += '<input type="number" class="htable-input exa-cell" data-ri="' + ri + '" data-col="' + encodeURIComponent(col) + '" min="0" placeholder="0">';
+            } else {
+                innerLabels.forEach(il => {
+                    const fullLabel = col + " \u00b7 " + il;
+                    h += '<div style="display:flex;align-items:center;gap:2px;">';
+                    h += '<span style="font-size:0.65rem;color:#334155;white-space:nowrap;min-width:45px;">' + il + '</span>';
+                    h += '<input type="number" class="htable-input exa-cell" data-ri="' + ri + '" data-col="' + encodeURIComponent(fullLabel) + '" min="0" placeholder="0" style="flex:1;min-width:55px;">';
+                    h += '</div>';
+                });
+            }
+            h += '</div>';
         });
         h += '</div>';
     });
@@ -1103,8 +1118,8 @@ function renderExactaGrid() {
 }
 
 function exaHideCol(el) {
-    const label = decodeURIComponent(el.dataset.col);
-    if (confirm("Ocultar columna \"" + label + "\"?")) { exactaDeletedCols.add(label); renderExacta(); }
+    const col = decodeURIComponent(el.dataset.col);
+    if (confirm("Ocultar columna \"" + col + "\"?")) { exactaDeletedCols.add(col); renderExacta(); }
 }
 
 function exaRemoveRow(ri) {
@@ -1153,52 +1168,72 @@ async function saveExactaQuotas() {
 }
 
 function renderExactaGridHtml(quotas) {
-    const rowMap = new Map();
+    const rows = new Map();
     const colOrder = [];
     const colSeen = new Set();
     const rowOrder = [];
+    const innerOrder = [];
+    const innerSeen = new Set();
 
     quotas.forEach(q => {
         const rowName = q.point_type;
-        const colName = q.value.split(" | ").slice(1).join(" | ");
+        const colPart = q.value.split(" | ").slice(1).join(" | ");
+        const parts = colPart.split(" \u00b7 ");
+        const colKey = parts[0];
+        const innerKey = parts.slice(1).join(" \u00b7 ");
 
-        if (!rowMap.has(rowName)) {
-            rowMap.set(rowName, new Map());
-            rowOrder.push(rowName);
-        }
-        rowMap.get(rowName).set(colName, q);
+        if (!rows.has(rowName)) { rows.set(rowName, new Map()); rowOrder.push(rowName); }
+        const colMap = rows.get(rowName);
+        if (!colMap.has(colKey)) colMap.set(colKey, new Map());
+        colMap.get(colKey).set(innerKey, q);
 
-        if (!colSeen.has(colName)) {
-            colSeen.add(colName);
-            colOrder.push(colName);
-        }
+        if (!colSeen.has(colKey)) { colSeen.add(colKey); colOrder.push(colKey); }
+        if (innerKey && !innerSeen.has(innerKey)) { innerSeen.add(innerKey); innerOrder.push(innerKey); }
     });
 
     let html = '<div class="htable-container" style="border-width:2px;border-color:#f59e0b;"><div class="htable-root-groups"><div class="htable-group"><div class="htable-cols-container">';
     html += '<div class="htable-cols-row header-row" style="background:#fef3c7;">';
     html += '<div style="min-width:150px;font-weight:800;">Punto</div>';
-    colOrder.forEach(col => {
-        html += '<div style="white-space:nowrap;font-weight:700;">' + col + '</div>';
-    });
+    colOrder.forEach(col => { html += '<div style="white-space:nowrap;text-align:center;font-weight:700;">' + col + '</div>'; });
     html += '</div>';
 
+    function cellHtml(q) {
+        if (!q) return '<div style="color:#94a3b8;font-style:italic;text-align:center;">\u2014</div>';
+        const t = q.target_count, cur = q.current_count;
+        const pct = t > 0 ? Math.min(100, Math.round((cur / t) * 100)) : 0;
+        let c = '#ef4444';
+        if (pct >= 100) c = '#3b82f6';
+        else if (pct >= 80) c = '#22c55e';
+        else if (pct >= 50) c = '#f59e0b';
+        return '<div><div class="val-container"><div class="val-disp">' + cur + '</div><div class="val-target">/ ' + t + '</div></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:' + pct + '%;background:' + c + ';"></div></div></div>';
+    }
+
     rowOrder.forEach(rowName => {
+        const colMap = rows.get(rowName);
         html += '<div class="htable-cols-row body-row">';
         html += '<div style="font-weight:700;text-align:center;">' + rowName + '</div>';
-        colOrder.forEach(colName => {
-            const q = rowMap.get(rowName).get(colName);
-            if (q) {
-                const t = q.target_count;
-                const cur = q.current_count;
-                const percent = t > 0 ? Math.min(100, Math.round((cur / t) * 100)) : 0;
-                let color = '#ef4444';
-                if (percent >= 100) color = '#3b82f6';
-                else if (percent >= 80) color = '#22c55e';
-                else if (percent >= 50) color = '#f59e0b';
-                html += '<div><div class="val-container"><div class="val-disp">' + cur + '</div><div class="val-target">/ ' + t + '</div></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:' + percent + '%;background:' + color + ';"></div></div></div>';
+        colOrder.forEach(colKey => {
+            const innerMap = colMap.get(colKey) || new Map();
+            html += '<div style="display:flex;flex-direction:column;gap:2px;padding:2px 4px;">';
+            if (innerOrder.length === 0) {
+                html += cellHtml(innerMap.get(""));
             } else {
-                html += '<div style="color:#94a3b8;font-style:italic;text-align:center;">—</div>';
+                innerOrder.forEach(ik => {
+                    const q = innerMap.get(ik);
+                    if (q) {
+                        const t = q.target_count, cur = q.current_count;
+                        const pct = t > 0 ? Math.min(100, Math.round((cur / t) * 100)) : 0;
+                        let c = '#ef4444';
+                        if (pct >= 100) c = '#3b82f6';
+                        else if (pct >= 80) c = '#22c55e';
+                        else if (pct >= 50) c = '#f59e0b';
+                        html += '<div style="display:flex;align-items:center;gap:2px;font-size:0.75rem;"><span style="color:#334155;min-width:45px;">' + ik + '</span><div style="flex:1;"><div class="val-container" style="font-size:0.75rem;"><div class="val-disp">' + cur + '</div><div class="val-target">/ ' + t + '</div></div><div class="progress-bar-bg" style="height:4px;"><div class="progress-bar-fill" style="width:' + pct + '%;height:4px;background:' + c + ';"></div></div></div></div>';
+                    } else {
+                        html += '<div style="display:flex;align-items:center;gap:2px;font-size:0.75rem;"><span style="color:#334155;min-width:45px;">' + ik + '</span><div style="color:#94a3b8;flex:1;text-align:center;">\u2014</div></div>';
+                    }
+                });
             }
+            html += '</div>';
         });
         html += '</div>';
     });
