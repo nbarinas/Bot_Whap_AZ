@@ -973,27 +973,25 @@ async function uploadTdc() {
 }
 
 // ============================================================
-// EXACTA MODULE - Cuotas exactas por Punto × Dimensiones
+// EXACTA MODULE - Cuota demogr\u00e1fica exacta + Tipo de Punto
 // ============================================================
 
-let exactaEPoints = [
+let exactaGridRows = ["Afluencia", "En el barrio", "En frente de edificio"];
+let exactaColDims = [
+    { id: 'nse', label: 'NSE', values: ["Estrato 2", "Estrato 3", "Estrato 4"], enabled: true },
+    { id: 'genero', label: 'G\u00e9nero', values: ["Hombre", "Mujer"], enabled: false },
+    { id: 'edad', label: 'Edad', values: ["18-36", "37-40"], enabled: false }
+];
+let exactaTP = [
     "Centro Comercial", "Iglesia", "Parque",
     "Plaza/Plazoleta", "Zona Comercial", "Colegio/Universidad"
 ];
+let exactaDeletedCols = new Set();
 
-let exactaEDims = [
-    { id: 'nse', label: 'NSE', values: ["Estrato 2", "Estrato 3", "Estrato 4"], enabled: true },
-    { id: 'genero', label: 'G\u00e9nero', values: ["Hombre", "Mujer"], enabled: false },
-    { id: 'edad', label: 'Edad', values: ["18-30", "31-45", "46+"], enabled: false }
-];
-
-let exactaEDeletedCols = new Set();
-
-function getExactaEColumns() {
-    const active = exactaEDims.filter(d => d.enabled);
+function getExactaCols() {
+    const active = exactaColDims.filter(d => d.enabled);
     if (active.length === 0) return [];
-    const allValues = active.map(d => d.values);
-    const combos = cartesian(...allValues);
+    const combos = cartesian(...active.map(d => d.values));
     return combos.map(combo => ({
         label: combo.join(" \u00b7 "),
         parts: combo
@@ -1005,21 +1003,22 @@ function openExactaModal() {
     document.getElementById('exactaStudyCode').value = '';
     document.getElementById('exactaErrorMsg').style.display = 'none';
 
-    exactaEPoints = [
+    exactaGridRows = ["Afluencia", "En el barrio", "En frente de edificio"];
+    exactaColDims = [
+        { id: 'nse', label: 'NSE', values: ["Estrato 2", "Estrato 3", "Estrato 4"], enabled: true },
+        { id: 'genero', label: 'G\u00e9nero', values: ["Hombre", "Mujer"], enabled: false },
+        { id: 'edad', label: 'Edad', values: ["18-36", "37-40"], enabled: false }
+    ];
+    exactaTP = [
         "Centro Comercial", "Iglesia", "Parque",
         "Plaza/Plazoleta", "Zona Comercial", "Colegio/Universidad"
     ];
-    exactaEDims = [
-        { id: 'nse', label: 'NSE', values: ["Estrato 2", "Estrato 3", "Estrato 4"], enabled: true },
-        { id: 'genero', label: 'G\u00e9nero', values: ["Hombre", "Mujer"], enabled: false },
-        { id: 'edad', label: 'Edad', values: ["18-30", "31-45", "46+"], enabled: false }
-    ];
-    exactaEDeletedCols.clear();
+    exactaDeletedCols.clear();
 
     document.getElementById('chkExactaGenero').checked = false;
     document.getElementById('chkExactaEdad').checked = false;
 
-    renderExactaTable();
+    renderExacta();
 }
 
 function closeExactaModal() {
@@ -1027,213 +1026,215 @@ function closeExactaModal() {
 }
 
 function toggleExactaDim(dimId, enabled) {
-    const dim = exactaEDims.find(d => d.id === dimId);
-    if (dim) {
-        dim.enabled = enabled;
-        exactaEDeletedCols.clear();
-        renderExactaTable();
-    }
+    const dim = exactaColDims.find(d => d.id === dimId);
+    if (dim) { dim.enabled = enabled; exactaDeletedCols.clear(); renderExacta(); }
 }
 
-function renderExactaTable() {
-    renderExactaDimEditor();
-    const container = document.getElementById('exactaTableContainer');
-    if (!container) return;
-
-    const allCols = getExactaEColumns();
-    const visibleCols = allCols.filter(c => !exactaEDeletedCols.has(c.label));
-
-    if (exactaEPoints.length === 0 || allCols.length === 0) {
-        container.innerHTML = '<p style="text-align:center; color:var(--text-muted); padding:1rem;">Agrega al menos un punto y selecciona dimensiones.</p>';
-        return;
-    }
-
-    if (visibleCols.length === 0) {
-        container.innerHTML = '<p style="text-align:center; color:var(--text-muted); padding:1rem;">Todas las columnas ocultas. Desmarca y marca una dimensi\u00f3n para restaurarlas.</p>';
-        return;
-    }
-
-    let html = '<div class="htable-container" style="border-width:2px; border-color:#f59e0b;">';
-    html += '<div class="htable-root-groups"><div class="htable-group">';
-    html += '<div class="htable-cols-container">';
-
-    html += '<div class="htable-cols-row header-row">';
-    html += '<div style="min-width:150px; font-weight:800;">Punto</div>';
-    visibleCols.forEach(col => {
-        html += `<div>${col.label} <span onclick="removeExactaCol(this)" data-col="${encodeURIComponent(col.label)}" style="cursor:pointer; color:#ef4444; font-size:1.2rem; font-weight:bold;" title="Ocultar columna">&times;</span></div>`;
-    });
-    html += '</div>';
-
-    exactaEPoints.forEach((point, pi) => {
-        html += '<div class="htable-cols-row body-row">';
-        html += `<div style="font-weight:700; text-align:center; display:flex; align-items:center; justify-content:center; gap:4px;">
-            <input type="text" class="exacta-point-name" value="${point.replace(/"/g, '&quot;')}" data-idx="${pi}" style="width:100%; border:none; background:transparent; font-weight:700; text-align:center; font-family:inherit; font-size:0.9rem;">
-            <span onclick="removeExactaPoint(${pi})" style="cursor:pointer; color:#ef4444; font-size:1.2rem; font-weight:bold;" title="Eliminar punto">&times;</span>
-        </div>`;
-        visibleCols.forEach(col => {
-            html += `<div><input type="number" class="htable-input exacta-cell" data-pi="${pi}" data-col="${encodeURIComponent(col.label)}" min="0" placeholder="0"></div>`;
-        });
-        html += '</div>';
-    });
-
-    html += '</div></div></div></div>';
-    container.innerHTML = html;
-
-    document.querySelectorAll('.exacta-point-name').forEach(input => {
-        input.addEventListener('change', function() {
-            const idx = parseInt(this.dataset.idx, 10);
-            if (this.value.trim() === '') this.value = exactaEPoints[idx];
-            else exactaEPoints[idx] = this.value.trim();
-        });
-    });
+function renderExacta() {
+    renderDimEditor();
+    renderGrid();
+    renderTP();
 }
 
-function renderExactaDimEditor() {
-    const container = document.getElementById('exactaDimEditor');
-    if (!container) return;
+function renderDimEditor() {
+    const c = document.getElementById('exactaDimEditor');
+    if (!c) return;
     let html = '';
-    exactaEDims.forEach((dim, di) => {
+    exactaColDims.forEach((dim, di) => {
         if (!dim.enabled) return;
-        html += '<div style="margin-bottom:8px; padding:8px 10px; background:#fff; border-radius:8px; border:1px solid var(--border-color); display:flex; align-items:center; gap:8px; flex-wrap:wrap;">';
+        html += '<div style="margin-bottom:6px; padding:6px 10px; background:#fff; border-radius:8px; border:1px solid var(--border-color); display:flex; align-items:center; gap:6px; flex-wrap:wrap;">';
         html += '<span style="font-weight:700; font-size:0.8rem; color:var(--text-muted); white-space:nowrap;">' + dim.label + ':</span>';
         html += '<div style="display:flex; flex-wrap:wrap; gap:4px; flex:1;">';
         dim.values.forEach((val, vi) => {
             html += '<span style="display:inline-flex; align-items:center; gap:2px; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:6px; padding:1px 4px;">';
-            html += '<input type="text" value="' + val.replace(/"/g, '&quot;') + '" data-dim="' + di + '" data-vi="' + vi + '" class="dim-value-input" style="width:auto; max-width:100px; border:none; background:transparent; font-weight:600; font-size:0.8rem; padding:2px 4px;">';
-            html += '<span onclick="removeDimValue(' + di + ', ' + vi + ')" style="cursor:pointer; color:#ef4444; font-size:1rem; font-weight:bold; line-height:1;">&times;</span>';
+            html += '<input type="text" value="' + val.replace(/"/g, '&quot;') + '" data-di="' + di + '" data-vi="' + vi + '" class="exa-dim-inp" style="width:auto; max-width:100px; border:none; background:transparent; font-weight:600; font-size:0.8rem; padding:2px 4px;">';
+            html += '<span onclick="exaRemoveVal(' + di + ',' + vi + ')" style="cursor:pointer; color:#ef4444; font-size:1rem; font-weight:bold; line-height:1;">&times;</span>';
             html += '</span>';
         });
         html += '</div></div>';
     });
-    container.innerHTML = html;
-    document.querySelectorAll('.dim-value-input').forEach(input => {
-        input.addEventListener('change', function () {
-            const di = parseInt(this.dataset.dim, 10);
+    c.innerHTML = html;
+    c.querySelectorAll('.exa-dim-inp').forEach(inp => {
+        inp.addEventListener('change', function () {
+            const di = parseInt(this.dataset.di, 10);
             const vi = parseInt(this.dataset.vi, 10);
-            const val = this.value.trim();
-            if (!val) { this.value = exactaEDims[di].values[vi]; return; }
-            exactaEDims[di].values[vi] = val;
-            exactaEDeletedCols.clear();
-            renderExactaTable();
+            const v = this.value.trim();
+            if (!v) { this.value = exactaColDims[di].values[vi]; return; }
+            exactaColDims[di].values[vi] = v;
+            exactaDeletedCols.clear();
+            renderExacta();
         });
     });
 }
 
-function removeDimValue(di, vi) {
+function exaRemoveVal(di, vi) {
     if (!confirm("Eliminar este valor?")) return;
-    exactaEDims[di].values.splice(vi, 1);
-    if (exactaEDims[di].values.length === 0) exactaEDims[di].values.push("Nuevo");
-    exactaEDeletedCols.clear();
-    renderExactaTable();
+    exactaColDims[di].values.splice(vi, 1);
+    if (exactaColDims[di].values.length === 0) exactaColDims[di].values.push("Nuevo");
+    exactaDeletedCols.clear();
+    renderExacta();
 }
 
-function removeExactaCol(el) {
-    const label = decodeURIComponent(el.dataset.col);
-    if (confirm("Ocultar columna \"" + label + "\"?")) {
-        exactaEDeletedCols.add(label);
-        renderExactaTable();
+function renderGrid() {
+    const container = document.getElementById('exactaTableContainer');
+    if (!container) return;
+    const allCols = getExactaCols();
+    const active = exactaColDims.filter(d => d.enabled);
+    const visible = allCols.filter(c => !exactaDeletedCols.has(c.label));
+
+    if (exactaGridRows.length === 0 || allCols.length === 0) {
+        container.innerHTML = '<p style="text-align:center; color:var(--text-muted); padding:1rem;">Agrega filas y selecciona dimensiones.</p>';
+        return;
     }
+    if (visible.length === 0) {
+        container.innerHTML = '<p style="text-align:center; color:var(--text-muted); padding:1rem;">Todas las columnas ocultas.</p>';
+        return;
+    }
+
+    let h = '<div class="htable-container" style="border-width:2px;border-color:#f59e0b;"><div class="htable-root-groups"><div class="htable-group"><div class="htable-cols-container">';
+
+    h += '<div class="htable-cols-row header-row">';
+    h += '<div style="min-width:150px;font-weight:800;">Punto</div>';
+    visible.forEach(col => {
+        h += '<div>';
+        col.parts.forEach((p, pi) => {
+            h += '<div style="' + (pi > 0 ? 'font-size:0.75rem;color:var(--text-muted);' : '') + '">' + p + '</div>';
+        });
+        h += '<span onclick="exaHideCol(this)" data-col="' + encodeURIComponent(col.label) + '" style="cursor:pointer;color:#ef4444;font-size:1rem;font-weight:bold;">&times;</span></div>';
+    });
+    h += '</div>';
+
+    exactaGridRows.forEach((row, ri) => {
+        h += '<div class="htable-cols-row body-row">';
+        h += '<div style="font-weight:700;text-align:center;display:flex;align-items:center;justify-content:center;gap:4px;">';
+        h += '<input type="text" class="exa-row-inp" value="' + row.replace(/"/g, '&quot;') + '" data-ri="' + ri + '" style="width:100%;border:none;background:transparent;font-weight:700;text-align:center;font-family:inherit;font-size:0.9rem;">';
+        h += '<span onclick="exaRemoveRow(' + ri + ')" style="cursor:pointer;color:#ef4444;font-size:1.2rem;font-weight:bold;">&times;</span></div>';
+        visible.forEach(col => {
+            h += '<div><input type="number" class="htable-input exa-cell" data-ri="' + ri + '" data-col="' + encodeURIComponent(col.label) + '" min="0" placeholder="0"></div>';
+        });
+        h += '</div>';
+    });
+
+    h += '</div></div></div></div>';
+    container.innerHTML = h;
+
+    container.querySelectorAll('.exa-row-inp').forEach(inp => {
+        inp.addEventListener('change', function () {
+            const ri = parseInt(this.dataset.ri, 10);
+            if (this.value.trim() === '') this.value = exactaGridRows[ri];
+            else exactaGridRows[ri] = this.value.trim();
+        });
+    });
 }
 
-function addExactaPoint() {
-    exactaEPoints.push("Nuevo punto");
-    renderExactaTable();
-    const inputs = document.querySelectorAll('.exacta-point-name');
-    if (inputs.length > 0) inputs[inputs.length - 1].focus();
+function renderTP() {
+    const container = document.getElementById('exactaTPContainer');
+    if (!container) return;
+    if (exactaTP.length === 0) {
+        container.innerHTML = '<p style="text-align:center; color:var(--text-muted); font-size:0.9rem; padding:0.5rem;">Sin tipos de punto. Agrega uno abajo.</p>';
+        return;
+    }
+    let h = '<div class="htable-container" style="border-width:1px;border-color:#10b981;"><div class="htable-root-groups"><div class="htable-group"><div class="htable-cols-container">';
+    h += '<div class="htable-cols-row header-row"><div style="font-weight:800;">Tipo de Punto</div><div style="font-weight:800;">Cuota</div></div>';
+    exactaTP.forEach((tp, ti) => {
+        h += '<div class="htable-cols-row body-row">';
+        h += '<div style="font-weight:700;text-align:center;display:flex;align-items:center;justify-content:center;gap:4px;">';
+        h += '<input type="text" class="exa-tp-inp" value="' + tp.replace(/"/g, '&quot;') + '" data-ti="' + ti + '" style="width:100%;border:none;background:transparent;font-weight:700;text-align:center;font-family:inherit;font-size:0.9rem;">';
+        h += '<span onclick="exaRemoveTP(' + ti + ')" style="cursor:pointer;color:#ef4444;font-size:1.2rem;font-weight:bold;">&times;</span></div>';
+        h += '<div><input type="number" class="htable-input exa-tp-cell" data-ti="' + ti + '" min="0" placeholder="0"></div>';
+        h += '</div>';
+    });
+    h += '</div></div></div></div>';
+    container.innerHTML = h;
+    container.querySelectorAll('.exa-tp-inp').forEach(inp => {
+        inp.addEventListener('change', function () {
+            const ti = parseInt(this.dataset.ti, 10);
+            if (this.value.trim() === '') this.value = exactaTP[ti];
+            else exactaTP[ti] = this.value.trim();
+        });
+    });
+}
+
+function exaHideCol(el) {
+    const label = decodeURIComponent(el.dataset.col);
+    if (confirm("Ocultar columna \"" + label + "\"?")) { exactaDeletedCols.add(label); renderExacta(); }
+}
+
+function exaRemoveRow(ri) {
+    if (!confirm("Eliminar \"" + exactaGridRows[ri] + "\"?")) return;
+    exactaGridRows.splice(ri, 1);
+    renderExacta();
+}
+
+function exaRemoveTP(ti) {
+    if (!confirm("Eliminar \"" + exactaTP[ti] + "\"?")) return;
+    exactaTP.splice(ti, 1);
+    renderExacta();
+}
+
+function addExactaRow() {
+    exactaGridRows.push("Nuevo punto");
+    renderExacta();
+    const inps = document.querySelectorAll('.exa-row-inp');
+    if (inps.length > 0) inps[inps.length - 1].focus();
 }
 
 function addExactaNse() {
-    const dim = exactaEDims.find(d => d.id === 'nse');
-    if (dim) {
-        dim.values.push("Nuevo");
-        exactaEDeletedCols.clear();
-        renderExactaTable();
-    }
+    const d = exactaColDims.find(x => x.id === 'nse');
+    if (d) { d.values.push("Nuevo"); exactaDeletedCols.clear(); renderExacta(); }
 }
 
 function addExactaValor(dimId) {
-    const dim = exactaEDims.find(d => d.id === dimId);
-    if (dim) {
-        dim.values.push(dimId === 'genero' ? "Otro" : "Nuevo rango");
-        exactaEDeletedCols.clear();
-        renderExactaTable();
-    }
+    const d = exactaColDims.find(x => x.id === dimId);
+    if (d) { d.values.push(dimId === 'genero' ? "Otro" : "Nuevo rango"); exactaDeletedCols.clear(); renderExacta(); }
 }
 
-function removeExactaPoint(idx) {
-    if (!confirm("Eliminar \"" + exactaEPoints[idx] + "\" y todas sus celdas?")) return;
-    exactaEPoints.splice(idx, 1);
-    renderExactaTable();
+function addExactaTP() {
+    exactaTP.push("Nuevo punto");
+    renderExacta();
 }
 
 async function saveExactaQuotas() {
-    const studyCode = document.getElementById('exactaStudyCode').value.trim();
-    const errorMsg = document.getElementById('exactaErrorMsg');
+    const sc = document.getElementById('exactaStudyCode').value.trim();
+    const err = document.getElementById('exactaErrorMsg');
+    if (!sc) { err.innerText = "Ingresa el ID del estudio"; err.style.display = 'block'; return; }
 
-    if (!studyCode) {
-        errorMsg.innerText = "Ingresa el ID del estudio";
-        errorMsg.style.display = 'block';
-        return;
-    }
-
-    const currentPoints = [];
-    document.querySelectorAll('.exacta-point-name').forEach(inp => {
-        const v = inp.value.trim();
-        if (v) currentPoints.push(v);
-    });
-
-    if (currentPoints.length === 0) {
-        errorMsg.innerText = "Debes tener al menos un punto";
-        errorMsg.style.display = 'block';
-        return;
-    }
+    const rows = [];
+    document.querySelectorAll('.exa-row-inp').forEach(inp => { const v = inp.value.trim(); if (v) rows.push(v); });
+    if (rows.length === 0) { err.innerText = "Debes tener al menos un punto en la tabla"; err.style.display = 'block'; return; }
 
     const payload = [];
-    let hasValues = false;
+    let hasVals = false;
 
-    document.querySelectorAll('.exacta-cell').forEach(input => {
-        const pi = parseInt(input.dataset.pi, 10);
-        const colLabel = decodeURIComponent(input.dataset.col);
-        const point = currentPoints[pi];
-        const val = parseInt(input.value, 10);
-        if (!point || !colLabel || isNaN(val) || val <= 0) return;
-        hasValues = true;
-        payload.push({
-            study_code: studyCode,
-            category: "Tipo de Punto",
-            value: point + " | " + colLabel,
-            target_count: val,
-            point_type: point
-        });
+    document.querySelectorAll('.exa-cell').forEach(inp => {
+        const ri = parseInt(inp.dataset.ri, 10);
+        const cl = decodeURIComponent(inp.dataset.col);
+        const row = rows[ri];
+        const v = parseInt(inp.value, 10);
+        if (!row || !cl || isNaN(v) || v <= 0) return;
+        hasVals = true;
+        payload.push({ study_code: sc, category: "Demogr\u00e1fico", value: row + " | " + cl, target_count: v, point_type: row });
     });
 
-    if (!hasValues) {
-        errorMsg.innerText = "Ingresa al menos un valor mayor a 0 en alguna celda";
-        errorMsg.style.display = 'block';
-        return;
-    }
+    document.querySelectorAll('.exa-tp-cell').forEach(inp => {
+        const ti = parseInt(inp.dataset.ti, 10);
+        const name = exactaTP[ti];
+        const v = parseInt(inp.value, 10);
+        if (!name || isNaN(v) || v <= 0) return;
+        hasVals = true;
+        payload.push({ study_code: sc, category: "Tipo de Punto", value: name, target_count: v, point_type: name });
+    });
 
-    errorMsg.style.display = 'none';
+    if (!hasVals) { err.innerText = "Ingresa al menos un valor mayor a 0"; err.style.display = 'block'; return; }
+    err.style.display = 'none';
 
     try {
         const res = await fetchWithAuth('/api/quotas/batch', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
         });
-        if (res.ok) {
-            closeExactaModal();
-            loadQuotas();
-        } else {
-            const data = await res.json().catch(() => ({}));
-            errorMsg.innerText = "Error: " + (data.detail || 'Error al guardar');
-            errorMsg.style.display = 'block';
-        }
-    } catch (e) {
-        console.error(e);
-        errorMsg.innerText = "Error de conexi\u00f3n";
-        errorMsg.style.display = 'block';
-    }
+        if (res.ok) { closeExactaModal(); loadQuotas(); }
+        else { const d = await res.json().catch(() => ({})); err.innerText = "Error: " + (d.detail || 'Error al guardar'); err.style.display = 'block'; }
+    } catch (e) { console.error(e); err.innerText = "Error de conexi\u00f3n"; err.style.display = 'block'; }
 }
 
 function renderTdcGridHtml(quotas) {
