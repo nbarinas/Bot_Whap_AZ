@@ -1077,7 +1077,7 @@ function renderExactaGrid() {
     innerDims.forEach(d => { innerCombos = innerCombos.flatMap(c => d.values.map(v => [...c, v])); });
     const innerLabels = innerCombos.length === 1 && innerCombos[0].length === 0 ? [] : innerCombos.map(combo => combo.join(" \u00b7 "));
 
-    let h = '<div class="htable-container" style="border-width:2px;border-color:#f59e0b;"><div class="htable-root-groups"><div class="htable-group"><div class="htable-cols-container">';
+    let h = '<div class="htable-container exacta-grid" style="border-width:2px;border-color:#f59e0b;"><div class="htable-root-groups"><div class="htable-group"><div class="htable-cols-container">';
     h += '<div class="htable-cols-row header-row">';
     h += '<div style="min-width:150px;font-weight:800;">Punto</div>';
     cols.forEach(col => {
@@ -1090,15 +1090,15 @@ function renderExactaGrid() {
         h += '<input type="text" class="exa-row-inp" value="' + row.replace(/"/g, '&quot;') + '" data-ri="' + ri + '" style="width:100%;border:none;background:transparent;font-weight:700;text-align:center;font-family:inherit;font-size:0.9rem;">';
         h += '<span onclick="exaRemoveRow(' + ri + ')" style="cursor:pointer;color:#ef4444;font-size:1.2rem;font-weight:bold;">&times;</span></div>';
         cols.forEach(col => {
-            h += '<div style="display:flex;flex-direction:column;gap:2px;padding:2px 4px;">';
+            h += '<div class="exa-cell-wrap">';
             if (innerLabels.length === 0) {
                 h += '<input type="number" class="htable-input exa-cell" data-ri="' + ri + '" data-col="' + encodeURIComponent(col) + '" min="0" placeholder="0">';
             } else {
                 innerLabels.forEach(il => {
                     const fullLabel = col + " \u00b7 " + il;
-                    h += '<div style="display:flex;align-items:center;gap:2px;">';
-                    h += '<span style="font-size:0.65rem;color:#334155;white-space:nowrap;min-width:45px;">' + il + '</span>';
-                    h += '<input type="number" class="htable-input exa-cell" data-ri="' + ri + '" data-col="' + encodeURIComponent(fullLabel) + '" min="0" placeholder="0" style="flex:1;min-width:55px;">';
+                    h += '<div class="exa-inner-row">';
+                    h += '<span class="exa-inner-label">' + il + '</span>';
+                    h += '<input type="number" class="htable-input exa-cell exa-inner-val" data-ri="' + ri + '" data-col="' + encodeURIComponent(fullLabel) + '" min="0" placeholder="0">';
                     h += '</div>';
                 });
             }
@@ -1191,7 +1191,7 @@ function renderExactaGridHtml(quotas) {
         if (innerKey && !innerSeen.has(innerKey)) { innerSeen.add(innerKey); innerOrder.push(innerKey); }
     });
 
-    let html = '<div class="htable-container" style="border-width:2px;border-color:#f59e0b;"><div class="htable-root-groups"><div class="htable-group"><div class="htable-cols-container">';
+    let html = '<div class="htable-container exacta-grid" style="border-width:2px;border-color:#f59e0b;"><div class="htable-root-groups"><div class="htable-group"><div class="htable-cols-container">';
     html += '<div class="htable-cols-row header-row" style="background:#fef3c7;">';
     html += '<div style="min-width:150px;font-weight:800;">Punto</div>';
     colOrder.forEach(col => { html += '<div style="white-space:nowrap;text-align:center;font-weight:700;">' + col + '</div>'; });
@@ -1205,7 +1205,7 @@ function renderExactaGridHtml(quotas) {
         if (pct >= 100) c = '#3b82f6';
         else if (pct >= 80) c = '#22c55e';
         else if (pct >= 50) c = '#f59e0b';
-        return '<div><div class="val-container"><div class="val-disp">' + cur + '</div><div class="val-target">/ ' + t + '</div></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:' + pct + '%;background:' + c + ';"></div></div></div>';
+        return '<div><div class="val-container exa-inner-number"><div class="val-disp">' + cur + '</div><div class="val-target">/ ' + t + '</div></div><div class="progress-bar-bg exa-inner-progress-bg"><div class="progress-bar-fill exa-progress-fill" style="width:' + pct + '%;background:' + c + ';"></div></div></div>';
     }
 
     rowOrder.forEach(rowName => {
@@ -1214,7 +1214,7 @@ function renderExactaGridHtml(quotas) {
         html += '<div style="font-weight:700;text-align:center;">' + rowName + '</div>';
         colOrder.forEach(colKey => {
             const innerMap = colMap.get(colKey) || new Map();
-            html += '<div style="display:flex;flex-direction:column;gap:2px;padding:2px 4px;">';
+            html += '<div class="exa-cell-wrap">';
             if (innerOrder.length === 0) {
                 html += cellHtml(innerMap.get(""));
             } else {
@@ -1227,9 +1227,9 @@ function renderExactaGridHtml(quotas) {
                         if (pct >= 100) c = '#3b82f6';
                         else if (pct >= 80) c = '#22c55e';
                         else if (pct >= 50) c = '#f59e0b';
-                        html += '<div style="display:flex;align-items:center;gap:2px;font-size:0.75rem;"><span style="color:#334155;min-width:45px;">' + ik + '</span><div style="flex:1;"><div class="val-container" style="font-size:0.75rem;"><div class="val-disp">' + cur + '</div><div class="val-target">/ ' + t + '</div></div><div class="progress-bar-bg" style="height:4px;"><div class="progress-bar-fill" style="width:' + pct + '%;height:4px;background:' + c + ';"></div></div></div></div>';
+                        html += '<div class="exa-inner-row"><span class="exa-inner-label">' + ik + '</span><div class="exa-inner-val"><div class="val-container exa-inner-number"><div class="val-disp">' + cur + '</div><div class="val-target">/ ' + t + '</div></div><div class="progress-bar-bg exa-inner-progress-bg"><div class="progress-bar-fill exa-progress-fill" style="width:' + pct + '%;background:' + c + ';"></div></div></div></div>';
                     } else {
-                        html += '<div style="display:flex;align-items:center;gap:2px;font-size:0.75rem;"><span style="color:#334155;min-width:45px;">' + ik + '</span><div style="color:#94a3b8;flex:1;text-align:center;">\u2014</div></div>';
+                        html += '<div class="exa-inner-row"><span class="exa-inner-label">' + ik + '</span><div style="color:#94a3b8;flex:1;text-align:center;">\u2014</div></div>';
                     }
                 });
             }

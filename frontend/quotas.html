@@ -353,6 +353,49 @@
             transition: width 0.3s;
         }
 
+        /* Exacta Modal Grid - more breathing room */
+        .exacta-grid .body-row>div {
+            padding: 10px 6px !important;
+        }
+        .exacta-grid .header-row>div {
+            padding: 10px 8px !important;
+            font-size: 0.9rem !important;
+        }
+        .exa-cell-wrap {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            padding: 2px 4px;
+        }
+        .exa-inner-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .exa-inner-label {
+            font-size: 0.75rem;
+            color: #334155;
+            white-space: nowrap;
+            min-width: 55px;
+            font-weight: 600;
+        }
+        .exa-inner-val {
+            flex: 1;
+            min-width: 60px;
+        }
+        .exa-inner-progress {
+            height: 8px !important;
+        }
+        .exa-inner-progress .exa-progress-fill {
+            height: 8px !important;
+        }
+        .exa-inner-progress-bg {
+            height: 8px !important;
+        }
+        .exa-inner-number {
+            font-size: 0.85rem !important;
+        }
+
         /* Desktop Compression & Root Layout Split */
         @media(min-width: 768px) {
             .htable-root-groups {
