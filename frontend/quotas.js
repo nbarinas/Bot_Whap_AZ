@@ -973,25 +973,52 @@ async function uploadTdc() {
 }
 
 // ============================================================
-// EXACTA MODULE - Cuotas exactas por Punto × NSE
+// EXACTA MODULE - Cuotas exactas por Punto × Dimensiones
 // ============================================================
 
-let exactaPoints = [
+let exactaEPoints = [
     "Centro Comercial", "Iglesia", "Parque",
     "Plaza/Plazoleta", "Zona Comercial", "Colegio/Universidad"
 ];
-let exactaNses = ["Estrato 2", "Estrato 3", "Estrato 4"];
+
+let exactaEDims = [
+    { id: 'nse', label: 'NSE', values: ["Estrato 2", "Estrato 3", "Estrato 4"], enabled: true },
+    { id: 'genero', label: 'G\u00e9nero', values: ["Hombre", "Mujer"], enabled: false },
+    { id: 'edad', label: 'Edad', values: ["18-30", "31-45", "46+"], enabled: false }
+];
+
+let exactaEDeletedCols = new Set();
+
+function getExactaEColumns() {
+    const active = exactaEDims.filter(d => d.enabled);
+    if (active.length === 0) return [];
+    const allValues = active.map(d => d.values);
+    const combos = cartesian(...allValues);
+    return combos.map(combo => ({
+        label: combo.join(" \u00b7 "),
+        parts: combo
+    }));
+}
 
 function openExactaModal() {
-    const modal = document.getElementById('exactaModal');
-    if (modal) modal.style.display = 'flex';
+    document.getElementById('exactaModal').style.display = 'flex';
     document.getElementById('exactaStudyCode').value = '';
     document.getElementById('exactaErrorMsg').style.display = 'none';
-    exactaPoints = [
+
+    exactaEPoints = [
         "Centro Comercial", "Iglesia", "Parque",
         "Plaza/Plazoleta", "Zona Comercial", "Colegio/Universidad"
     ];
-    exactaNses = ["Estrato 2", "Estrato 3", "Estrato 4"];
+    exactaEDims = [
+        { id: 'nse', label: 'NSE', values: ["Estrato 2", "Estrato 3", "Estrato 4"], enabled: true },
+        { id: 'genero', label: 'G\u00e9nero', values: ["Hombre", "Mujer"], enabled: false },
+        { id: 'edad', label: 'Edad', values: ["18-30", "31-45", "46+"], enabled: false }
+    ];
+    exactaEDeletedCols.clear();
+
+    document.getElementById('chkExactaGenero').checked = false;
+    document.getElementById('chkExactaEdad').checked = false;
+
     renderExactaTable();
 }
 
@@ -999,12 +1026,29 @@ function closeExactaModal() {
     document.getElementById('exactaModal').style.display = 'none';
 }
 
+function toggleExactaDim(dimId, enabled) {
+    const dim = exactaEDims.find(d => d.id === dimId);
+    if (dim) {
+        dim.enabled = enabled;
+        exactaEDeletedCols.clear();
+        renderExactaTable();
+    }
+}
+
 function renderExactaTable() {
     const container = document.getElementById('exactaTableContainer');
     if (!container) return;
 
-    if (exactaPoints.length === 0 || exactaNses.length === 0) {
-        container.innerHTML = '<p style="text-align:center; color:var(--text-muted); padding:1rem;">Agrega al menos un punto y un NSE para empezar.</p>';
+    const allCols = getExactaEColumns();
+    const visibleCols = allCols.filter(c => !exactaEDeletedCols.has(c.label));
+
+    if (exactaEPoints.length === 0 || allCols.length === 0) {
+        container.innerHTML = '<p style="text-align:center; color:var(--text-muted); padding:1rem;">Agrega al menos un punto y selecciona dimensiones.</p>';
+        return;
+    }
+
+    if (visibleCols.length === 0) {
+        container.innerHTML = '<p style="text-align:center; color:var(--text-muted); padding:1rem;">Todas las columnas ocultas. Desmarca y marca una dimensi\u00f3n para restaurarlas.</p>';
         return;
     }
 
@@ -1014,19 +1058,19 @@ function renderExactaTable() {
 
     html += '<div class="htable-cols-row header-row">';
     html += '<div style="min-width:150px; font-weight:800;">Punto</div>';
-    exactaNses.forEach((nse, ni) => {
-        html += `<div>${nse} <span onclick="removeExactaNse(${ni})" style="cursor:pointer; color:#ef4444; font-size:1.2rem; font-weight:bold;" title="Eliminar NSE">&times;</span></div>`;
+    visibleCols.forEach(col => {
+        html += `<div>${col.label} <span onclick="removeExactaCol(this)" data-col="${encodeURIComponent(col.label)}" style="cursor:pointer; color:#ef4444; font-size:1.2rem; font-weight:bold;" title="Ocultar columna">&times;</span></div>`;
     });
     html += '</div>';
 
-    exactaPoints.forEach((point, pi) => {
+    exactaEPoints.forEach((point, pi) => {
         html += '<div class="htable-cols-row body-row">';
         html += `<div style="font-weight:700; text-align:center; display:flex; align-items:center; justify-content:center; gap:4px;">
             <input type="text" class="exacta-point-name" value="${point.replace(/"/g, '&quot;')}" data-idx="${pi}" style="width:100%; border:none; background:transparent; font-weight:700; text-align:center; font-family:inherit; font-size:0.9rem;">
             <span onclick="removeExactaPoint(${pi})" style="cursor:pointer; color:#ef4444; font-size:1.2rem; font-weight:bold;" title="Eliminar punto">&times;</span>
         </div>`;
-        exactaNses.forEach((nse, ni) => {
-            html += `<div><input type="number" class="htable-input exacta-cell" data-pi="${pi}" data-ni="${ni}" min="0" placeholder="0"></div>`;
+        visibleCols.forEach(col => {
+            html += `<div><input type="number" class="htable-input exacta-cell" data-pi="${pi}" data-col="${encodeURIComponent(col.label)}" min="0" placeholder="0"></div>`;
         });
         html += '</div>';
     });
@@ -1037,33 +1081,39 @@ function renderExactaTable() {
     document.querySelectorAll('.exacta-point-name').forEach(input => {
         input.addEventListener('change', function() {
             const idx = parseInt(this.dataset.idx, 10);
-            if (this.value.trim() === '') this.value = exactaPoints[idx];
-            else exactaPoints[idx] = this.value.trim();
+            if (this.value.trim() === '') this.value = exactaEPoints[idx];
+            else exactaEPoints[idx] = this.value.trim();
         });
     });
 }
 
+function removeExactaCol(el) {
+    const label = decodeURIComponent(el.dataset.col);
+    if (confirm("Ocultar columna \"" + label + "\"?")) {
+        exactaEDeletedCols.add(label);
+        renderExactaTable();
+    }
+}
+
 function addExactaPoint() {
-    exactaPoints.push("Nuevo punto");
+    exactaEPoints.push("Nuevo punto");
     renderExactaTable();
     const inputs = document.querySelectorAll('.exacta-point-name');
     if (inputs.length > 0) inputs[inputs.length - 1].focus();
 }
 
 function addExactaNse() {
-    exactaNses.push("Nuevo NSE");
-    renderExactaTable();
+    const dim = exactaEDims.find(d => d.id === 'nse');
+    if (dim) {
+        dim.values.push("Nuevo");
+        exactaEDeletedCols.clear();
+        renderExactaTable();
+    }
 }
 
 function removeExactaPoint(idx) {
-    if (!confirm(`¿Eliminar "${exactaPoints[idx]}" y todas sus celdas?`)) return;
-    exactaPoints.splice(idx, 1);
-    renderExactaTable();
-}
-
-function removeExactaNse(idx) {
-    if (!confirm(`¿Eliminar "${exactaNses[idx]}" de todas las filas?`)) return;
-    exactaNses.splice(idx, 1);
+    if (!confirm("Eliminar \"" + exactaEPoints[idx] + "\" y todas sus celdas?")) return;
+    exactaEPoints.splice(idx, 1);
     renderExactaTable();
 }
 
@@ -1077,11 +1127,10 @@ async function saveExactaQuotas() {
         return;
     }
 
-    const pointInputs = document.querySelectorAll('.exacta-point-name');
     const currentPoints = [];
-    pointInputs.forEach(input => {
-        const val = input.value.trim();
-        if (val) currentPoints.push(val);
+    document.querySelectorAll('.exacta-point-name').forEach(inp => {
+        const v = inp.value.trim();
+        if (v) currentPoints.push(v);
     });
 
     if (currentPoints.length === 0) {
@@ -1095,19 +1144,15 @@ async function saveExactaQuotas() {
 
     document.querySelectorAll('.exacta-cell').forEach(input => {
         const pi = parseInt(input.dataset.pi, 10);
-        const ni = parseInt(input.dataset.ni, 10);
+        const colLabel = decodeURIComponent(input.dataset.col);
         const point = currentPoints[pi];
-        const nse = exactaNses[ni];
         const val = parseInt(input.value, 10);
-
-        if (!point || !nse) return;
-        if (isNaN(val) || val <= 0) return;
-
+        if (!point || !colLabel || isNaN(val) || val <= 0) return;
         hasValues = true;
         payload.push({
             study_code: studyCode,
             category: "Tipo de Punto",
-            value: point + " | " + nse,
+            value: point + " | " + colLabel,
             target_count: val,
             point_type: point
         });

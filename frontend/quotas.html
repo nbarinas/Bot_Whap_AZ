@@ -614,12 +614,24 @@
     <div id="exactaModal" class="modal">
         <div class="modal-content" style="max-width: 800px;">
             <h2 style="margin:0 0 1rem 0; font-size:1.5rem; font-weight:800; text-align:center; color:#f59e0b;">
-                <i class="fas fa-bullseye"></i> Cuota Exacta por Punto &times; NSE
+                <i class="fas fa-bullseye"></i> Cuota Exacta
             </h2>
             <div class="modal-body">
                 <div class="form-group">
                     <label>Estudio ID</label>
                     <input type="text" id="exactaStudyCode" placeholder="Ej: 1542" required>
+                </div>
+                <div style="display:flex; gap:15px; margin-bottom:12px; padding:12px; background:#f8fafc; border-radius:10px; border:1px solid var(--border-color); flex-wrap:wrap; align-items:center;">
+                    <span style="font-weight:700; color:var(--text-muted); font-size:0.9rem;">Columnas:</span>
+                    <label style="cursor:pointer; font-weight:600; display:flex; align-items:center; gap:4px; color:#64748b;">
+                        <input type="checkbox" id="chkExactaNse" checked disabled> NSE
+                    </label>
+                    <label style="cursor:pointer; font-weight:600; display:flex; align-items:center; gap:4px;">
+                        <input type="checkbox" id="chkExactaGenero" onchange="toggleExactaDim('genero', this.checked)"> G&eacute;nero
+                    </label>
+                    <label style="cursor:pointer; font-weight:600; display:flex; align-items:center; gap:4px;">
+                        <input type="checkbox" id="chkExactaEdad" onchange="toggleExactaDim('edad', this.checked)"> Edad
+                    </label>
                 </div>
                 <div id="exactaTableContainer"></div>
                 <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
