@@ -1036,6 +1036,7 @@ function toggleExactaDim(dimId, enabled) {
 }
 
 function renderExactaTable() {
+    renderExactaDimEditor();
     const container = document.getElementById('exactaTableContainer');
     if (!container) return;
 
@@ -1085,6 +1086,45 @@ function renderExactaTable() {
             else exactaEPoints[idx] = this.value.trim();
         });
     });
+}
+
+function renderExactaDimEditor() {
+    const container = document.getElementById('exactaDimEditor');
+    if (!container) return;
+    let html = '';
+    exactaEDims.forEach((dim, di) => {
+        if (!dim.enabled) return;
+        html += '<div style="margin-bottom:8px; padding:8px 10px; background:#fff; border-radius:8px; border:1px solid var(--border-color); display:flex; align-items:center; gap:8px; flex-wrap:wrap;">';
+        html += '<span style="font-weight:700; font-size:0.8rem; color:var(--text-muted); white-space:nowrap;">' + dim.label + ':</span>';
+        html += '<div style="display:flex; flex-wrap:wrap; gap:4px; flex:1;">';
+        dim.values.forEach((val, vi) => {
+            html += '<span style="display:inline-flex; align-items:center; gap:2px; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:6px; padding:1px 4px;">';
+            html += '<input type="text" value="' + val.replace(/"/g, '&quot;') + '" data-dim="' + di + '" data-vi="' + vi + '" class="dim-value-input" style="width:auto; max-width:100px; border:none; background:transparent; font-weight:600; font-size:0.8rem; padding:2px 4px;">';
+            html += '<span onclick="removeDimValue(' + di + ', ' + vi + ')" style="cursor:pointer; color:#ef4444; font-size:1rem; font-weight:bold; line-height:1;">&times;</span>';
+            html += '</span>';
+        });
+        html += '</div></div>';
+    });
+    container.innerHTML = html;
+    document.querySelectorAll('.dim-value-input').forEach(input => {
+        input.addEventListener('change', function () {
+            const di = parseInt(this.dataset.dim, 10);
+            const vi = parseInt(this.dataset.vi, 10);
+            const val = this.value.trim();
+            if (!val) { this.value = exactaEDims[di].values[vi]; return; }
+            exactaEDims[di].values[vi] = val;
+            exactaEDeletedCols.clear();
+            renderExactaTable();
+        });
+    });
+}
+
+function removeDimValue(di, vi) {
+    if (!confirm("Eliminar este valor?")) return;
+    exactaEDims[di].values.splice(vi, 1);
+    if (exactaEDims[di].values.length === 0) exactaEDims[di].values.push("Nuevo");
+    exactaEDeletedCols.clear();
+    renderExactaTable();
 }
 
 function removeExactaCol(el) {
