@@ -66,16 +66,19 @@ async function loadQuotas() {
             
             const stdRoot = {};
             const ptRoot = {};
+            const exactaQuotas = [];
 
             quotas.forEach(q => {
                 if (q.value && q.value.startsWith("Censos")) return;
                 
                 if (q.category === "Tipo de Punto") {
-                    // It's a point type quota
-                    if (!ptRoot["Tipo de Punto"]) ptRoot["Tipo de Punto"] = { __isLeaf: true, __quotas: [] };
-                    ptRoot["Tipo de Punto"].__quotas.push(q);
+                    if (q.value && q.value.includes(" | ")) {
+                        exactaQuotas.push(q);
+                    } else {
+                        if (!ptRoot["Tipo de Punto"]) ptRoot["Tipo de Punto"] = { __isLeaf: true, __quotas: [] };
+                        ptRoot["Tipo de Punto"].__quotas.push(q);
+                    }
                 } else {
-                    // Normal demographic quota
                     const parts = q.category === "General" ? [] : q.category.split(" | ");
                     let current = stdRoot;
                     parts.forEach((p, idx) => {
@@ -94,10 +97,9 @@ async function loadQuotas() {
             });
 
             enrichWithTotals(stdRoot);
-            // We don't necessarily need enrichWithTotals for ptRoot if it's just one flat row, 
-            // but let's do it if there's more than one leaf? No, ptRoot is flat.
             
             const stdHtml = renderTreeHtml(stdRoot, true);
+            const exactaHtml = exactaQuotas.length > 0 ? renderExactaGridHtml(exactaQuotas) : "";
             const ptHtml = Object.keys(ptRoot).length > 0 ? renderTreeHtml(ptRoot, true) : "";
 
             const statusBadge = isClosed ? '<span style="background:var(--text-muted); color:white; padding:2px 8px; border-radius:10px; margin-left:10px; font-size:0.8rem;"><i class="fas fa-archive"></i> Cerrado</span>' : '';
@@ -121,10 +123,10 @@ async function loadQuotas() {
                     </div>
                 </div>
                 <div style="display: flex; flex-wrap: wrap; gap: 20px; padding: 15px; background: #fff; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; ${isClosed ? 'opacity:0.6; pointer-events:none;' : ''}">
-                    ${ptHtml ? `
+                    ${exactaHtml || ptHtml ? `
                     <div style="flex: 1 1 300px; min-width: 300px;">
                         <h4 style="color:var(--primary); margin-bottom:0.8rem; font-size:1rem;"><i class="fas fa-map-marker-alt"></i> Cuota de Tipos de Puntos</h4>
-                        <div class="htable-root-groups" style="border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;">${ptHtml}</div>
+                        <div class="htable-root-groups" style="border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;">${exactaHtml}${ptHtml}</div>
                     </div>` : ""}
                     
                     <div style="flex: 2 1 600px; min-width: 400px;">
@@ -973,18 +975,14 @@ async function uploadTdc() {
 }
 
 // ============================================================
-// EXACTA MODULE - Cuota demogr\u00e1fica exacta + Tipo de Punto
+// EXACTA MODULE
 // ============================================================
 
-let exactaGridRows = ["Afluencia", "En el barrio", "En frente de edificio"];
+let exactaEPoints = ["Afluencia", "En el barrio", "En frente de edificio"];
 let exactaColDims = [
     { id: 'nse', label: 'NSE', values: ["Estrato 2", "Estrato 3", "Estrato 4"], enabled: true },
     { id: 'genero', label: 'G\u00e9nero', values: ["Hombre", "Mujer"], enabled: false },
     { id: 'edad', label: 'Edad', values: ["18-36", "37-40"], enabled: false }
-];
-let exactaTP = [
-    "Centro Comercial", "Iglesia", "Parque",
-    "Plaza/Plazoleta", "Zona Comercial", "Colegio/Universidad"
 ];
 let exactaDeletedCols = new Set();
 
@@ -1002,22 +1000,15 @@ function openExactaModal() {
     document.getElementById('exactaModal').style.display = 'flex';
     document.getElementById('exactaStudyCode').value = '';
     document.getElementById('exactaErrorMsg').style.display = 'none';
-
-    exactaGridRows = ["Afluencia", "En el barrio", "En frente de edificio"];
+    exactaEPoints = ["Afluencia", "En el barrio", "En frente de edificio"];
     exactaColDims = [
         { id: 'nse', label: 'NSE', values: ["Estrato 2", "Estrato 3", "Estrato 4"], enabled: true },
         { id: 'genero', label: 'G\u00e9nero', values: ["Hombre", "Mujer"], enabled: false },
         { id: 'edad', label: 'Edad', values: ["18-36", "37-40"], enabled: false }
     ];
-    exactaTP = [
-        "Centro Comercial", "Iglesia", "Parque",
-        "Plaza/Plazoleta", "Zona Comercial", "Colegio/Universidad"
-    ];
     exactaDeletedCols.clear();
-
     document.getElementById('chkExactaGenero').checked = false;
     document.getElementById('chkExactaEdad').checked = false;
-
     renderExacta();
 }
 
@@ -1026,88 +1017,71 @@ function closeExactaModal() {
 }
 
 function toggleExactaDim(dimId, enabled) {
-    const dim = exactaColDims.find(d => d.id === dimId);
-    if (dim) { dim.enabled = enabled; exactaDeletedCols.clear(); renderExacta(); }
+    const d = exactaColDims.find(x => x.id === dimId);
+    if (d) { d.enabled = enabled; exactaDeletedCols.clear(); renderExacta(); }
 }
 
 function renderExacta() {
-    renderDimEditor();
-    renderGrid();
-    renderTP();
+    renderExactaDimEditor();
+    renderExactaGrid();
 }
 
-function renderDimEditor() {
+function renderExactaDimEditor() {
     const c = document.getElementById('exactaDimEditor');
     if (!c) return;
-    let html = '';
+    let h = '';
     exactaColDims.forEach((dim, di) => {
         if (!dim.enabled) return;
-        html += '<div style="margin-bottom:6px; padding:6px 10px; background:#fff; border-radius:8px; border:1px solid var(--border-color); display:flex; align-items:center; gap:6px; flex-wrap:wrap;">';
-        html += '<span style="font-weight:700; font-size:0.8rem; color:var(--text-muted); white-space:nowrap;">' + dim.label + ':</span>';
-        html += '<div style="display:flex; flex-wrap:wrap; gap:4px; flex:1;">';
+        h += '<div style="margin-bottom:6px;padding:6px 10px;background:#fff;border-radius:8px;border:1px solid var(--border-color);display:flex;align-items:center;gap:6px;flex-wrap:wrap;">';
+        h += '<span style="font-weight:700;font-size:0.8rem;color:var(--text-muted);white-space:nowrap;">' + dim.label + ':</span>';
+        h += '<div style="display:flex;flex-wrap:wrap;gap:4px;flex:1;">';
         dim.values.forEach((val, vi) => {
-            html += '<span style="display:inline-flex; align-items:center; gap:2px; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:6px; padding:1px 4px;">';
-            html += '<input type="text" value="' + val.replace(/"/g, '&quot;') + '" data-di="' + di + '" data-vi="' + vi + '" class="exa-dim-inp" style="width:auto; max-width:100px; border:none; background:transparent; font-weight:600; font-size:0.8rem; padding:2px 4px;">';
-            html += '<span onclick="exaRemoveVal(' + di + ',' + vi + ')" style="cursor:pointer; color:#ef4444; font-size:1rem; font-weight:bold; line-height:1;">&times;</span>';
-            html += '</span>';
+            h += '<span style="display:inline-flex;align-items:center;gap:2px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;padding:1px 4px;">';
+            h += '<input type="text" value="' + val.replace(/"/g, '&quot;') + '" data-di="' + di + '" data-vi="' + vi + '" class="exa-dim-inp" style="width:auto;max-width:100px;border:none;background:transparent;font-weight:600;font-size:0.8rem;padding:2px 4px;">';
+            h += '<span onclick="exaRemoveVal(' + di + ',' + vi + ')" style="cursor:pointer;color:#ef4444;font-size:1rem;font-weight:bold;line-height:1;">&times;</span>';
+            h += '</span>';
         });
-        html += '</div></div>';
+        h += '</div></div>';
     });
-    c.innerHTML = html;
+    c.innerHTML = h;
     c.querySelectorAll('.exa-dim-inp').forEach(inp => {
         inp.addEventListener('change', function () {
-            const di = parseInt(this.dataset.di, 10);
-            const vi = parseInt(this.dataset.vi, 10);
-            const v = this.value.trim();
+            const di = parseInt(this.dataset.di, 10), vi = parseInt(this.dataset.vi, 10), v = this.value.trim();
             if (!v) { this.value = exactaColDims[di].values[vi]; return; }
-            exactaColDims[di].values[vi] = v;
-            exactaDeletedCols.clear();
-            renderExacta();
+            exactaColDims[di].values[vi] = v; exactaDeletedCols.clear(); renderExacta();
         });
     });
 }
 
 function exaRemoveVal(di, vi) {
-    if (!confirm("Eliminar este valor?")) return;
+    if (!confirm("Eliminar?")) return;
     exactaColDims[di].values.splice(vi, 1);
     if (exactaColDims[di].values.length === 0) exactaColDims[di].values.push("Nuevo");
-    exactaDeletedCols.clear();
-    renderExacta();
+    exactaDeletedCols.clear(); renderExacta();
 }
 
-function renderGrid() {
+function renderExactaGrid() {
     const container = document.getElementById('exactaTableContainer');
     if (!container) return;
     const allCols = getExactaCols();
-    const active = exactaColDims.filter(d => d.enabled);
     const visible = allCols.filter(c => !exactaDeletedCols.has(c.label));
-
-    if (exactaGridRows.length === 0 || allCols.length === 0) {
-        container.innerHTML = '<p style="text-align:center; color:var(--text-muted); padding:1rem;">Agrega filas y selecciona dimensiones.</p>';
-        return;
+    if (exactaEPoints.length === 0 || allCols.length === 0) {
+        container.innerHTML = '<p style="text-align:center;color:var(--text-muted);padding:1rem;">Agrega filas y columnas.</p>'; return;
     }
     if (visible.length === 0) {
-        container.innerHTML = '<p style="text-align:center; color:var(--text-muted); padding:1rem;">Todas las columnas ocultas.</p>';
-        return;
+        container.innerHTML = '<p style="text-align:center;color:var(--text-muted);padding:1rem;">Columnas ocultas.</p>'; return;
     }
-
     let h = '<div class="htable-container" style="border-width:2px;border-color:#f59e0b;"><div class="htable-root-groups"><div class="htable-group"><div class="htable-cols-container">';
-
     h += '<div class="htable-cols-row header-row">';
     h += '<div style="min-width:150px;font-weight:800;">Punto</div>';
     visible.forEach(col => {
-        const first = col.parts[0];
-        const rest = col.parts.slice(1);
-        let labelHtml = '<span style="font-weight:800;">' + first + '</span>';
-        if (rest.length > 0) {
-            labelHtml += ' <span style="color:#334155;font-size:0.75rem;">' + rest.join(' \u00b7 ') + '</span>';
-        }
-        h += '<div style="white-space:nowrap;">' + labelHtml;
-        h += ' <span onclick="exaHideCol(this)" data-col="' + encodeURIComponent(col.label) + '" style="cursor:pointer;color:#ef4444;font-weight:bold;">&times;</span></div>';
+        const first = col.parts[0], rest = col.parts.slice(1);
+        let l = '<span style="font-weight:800;">' + first + '</span>';
+        if (rest.length > 0) l += ' <span style="color:#334155;font-size:0.75rem;">' + rest.join(' \u00b7 ') + '</span>';
+        h += '<div style="white-space:nowrap;">' + l + ' <span onclick="exaHideCol(this)" data-col="' + encodeURIComponent(col.label) + '" style="cursor:pointer;color:#ef4444;font-weight:bold;">&times;</span></div>';
     });
     h += '</div>';
-
-    exactaGridRows.forEach((row, ri) => {
+    exactaEPoints.forEach((row, ri) => {
         h += '<div class="htable-cols-row body-row">';
         h += '<div style="font-weight:700;text-align:center;display:flex;align-items:center;justify-content:center;gap:4px;">';
         h += '<input type="text" class="exa-row-inp" value="' + row.replace(/"/g, '&quot;') + '" data-ri="' + ri + '" style="width:100%;border:none;background:transparent;font-weight:700;text-align:center;font-family:inherit;font-size:0.9rem;">';
@@ -1117,43 +1091,13 @@ function renderGrid() {
         });
         h += '</div>';
     });
-
     h += '</div></div></div></div>';
     container.innerHTML = h;
-
     container.querySelectorAll('.exa-row-inp').forEach(inp => {
         inp.addEventListener('change', function () {
             const ri = parseInt(this.dataset.ri, 10);
-            if (this.value.trim() === '') this.value = exactaGridRows[ri];
-            else exactaGridRows[ri] = this.value.trim();
-        });
-    });
-}
-
-function renderTP() {
-    const container = document.getElementById('exactaTPContainer');
-    if (!container) return;
-    if (exactaTP.length === 0) {
-        container.innerHTML = '<p style="text-align:center; color:var(--text-muted); font-size:0.9rem; padding:0.5rem;">Sin tipos de punto. Agrega uno abajo.</p>';
-        return;
-    }
-    let h = '<div class="htable-container" style="border-width:1px;border-color:#10b981;"><div class="htable-root-groups"><div class="htable-group"><div class="htable-cols-container">';
-    h += '<div class="htable-cols-row header-row"><div style="font-weight:800;">Tipo de Punto</div><div style="font-weight:800;">Cuota</div></div>';
-    exactaTP.forEach((tp, ti) => {
-        h += '<div class="htable-cols-row body-row">';
-        h += '<div style="font-weight:700;text-align:center;display:flex;align-items:center;justify-content:center;gap:4px;">';
-        h += '<input type="text" class="exa-tp-inp" value="' + tp.replace(/"/g, '&quot;') + '" data-ti="' + ti + '" style="width:100%;border:none;background:transparent;font-weight:700;text-align:center;font-family:inherit;font-size:0.9rem;">';
-        h += '<span onclick="exaRemoveTP(' + ti + ')" style="cursor:pointer;color:#ef4444;font-size:1.2rem;font-weight:bold;">&times;</span></div>';
-        h += '<div><input type="number" class="htable-input exa-tp-cell" data-ti="' + ti + '" min="0" placeholder="0"></div>';
-        h += '</div>';
-    });
-    h += '</div></div></div></div>';
-    container.innerHTML = h;
-    container.querySelectorAll('.exa-tp-inp').forEach(inp => {
-        inp.addEventListener('change', function () {
-            const ti = parseInt(this.dataset.ti, 10);
-            if (this.value.trim() === '') this.value = exactaTP[ti];
-            else exactaTP[ti] = this.value.trim();
+            if (this.value.trim() === '') this.value = exactaEPoints[ri];
+            else exactaEPoints[ri] = this.value.trim();
         });
     });
 }
@@ -1164,20 +1108,12 @@ function exaHideCol(el) {
 }
 
 function exaRemoveRow(ri) {
-    if (!confirm("Eliminar \"" + exactaGridRows[ri] + "\"?")) return;
-    exactaGridRows.splice(ri, 1);
-    renderExacta();
-}
-
-function exaRemoveTP(ti) {
-    if (!confirm("Eliminar \"" + exactaTP[ti] + "\"?")) return;
-    exactaTP.splice(ti, 1);
-    renderExacta();
+    if (!confirm("Eliminar \"" + exactaEPoints[ri] + "\"?")) return;
+    exactaEPoints.splice(ri, 1); renderExacta();
 }
 
 function addExactaRow() {
-    exactaGridRows.push("Nuevo punto");
-    renderExacta();
+    exactaEPoints.push("Nuevo punto"); renderExacta();
     const inps = document.querySelectorAll('.exa-row-inp');
     if (inps.length > 0) inps[inps.length - 1].focus();
 }
@@ -1192,52 +1128,83 @@ function addExactaValor(dimId) {
     if (d) { d.values.push(dimId === 'genero' ? "Otro" : "Nuevo rango"); exactaDeletedCols.clear(); renderExacta(); }
 }
 
-function addExactaTP() {
-    exactaTP.push("Nuevo punto");
-    renderExacta();
-}
-
 async function saveExactaQuotas() {
     const sc = document.getElementById('exactaStudyCode').value.trim();
     const err = document.getElementById('exactaErrorMsg');
     if (!sc) { err.innerText = "Ingresa el ID del estudio"; err.style.display = 'block'; return; }
-
     const rows = [];
     document.querySelectorAll('.exa-row-inp').forEach(inp => { const v = inp.value.trim(); if (v) rows.push(v); });
-    if (rows.length === 0) { err.innerText = "Debes tener al menos un punto en la tabla"; err.style.display = 'block'; return; }
-
-    const payload = [];
-    let hasVals = false;
-
+    if (rows.length === 0) { err.innerText = "Debes tener al menos un punto"; err.style.display = 'block'; return; }
+    const payload = []; let hasVals = false;
     document.querySelectorAll('.exa-cell').forEach(inp => {
-        const ri = parseInt(inp.dataset.ri, 10);
-        const cl = decodeURIComponent(inp.dataset.col);
-        const row = rows[ri];
-        const v = parseInt(inp.value, 10);
+        const ri = parseInt(inp.dataset.ri, 10), cl = decodeURIComponent(inp.dataset.col);
+        const row = rows[ri], v = parseInt(inp.value, 10);
         if (!row || !cl || isNaN(v) || v <= 0) return;
         hasVals = true;
-        payload.push({ study_code: sc, category: "Demogr\u00e1fico", value: row + " | " + cl, target_count: v, point_type: row });
+        payload.push({ study_code: sc, category: "Tipo de Punto", value: row + " | " + cl, target_count: v, point_type: row });
     });
-
-    document.querySelectorAll('.exa-tp-cell').forEach(inp => {
-        const ti = parseInt(inp.dataset.ti, 10);
-        const name = exactaTP[ti];
-        const v = parseInt(inp.value, 10);
-        if (!name || isNaN(v) || v <= 0) return;
-        hasVals = true;
-        payload.push({ study_code: sc, category: "Tipo de Punto", value: name, target_count: v, point_type: name });
-    });
-
-    if (!hasVals) { err.innerText = "Ingresa al menos un valor mayor a 0"; err.style.display = 'block'; return; }
+    if (!hasVals) { err.innerText = "Ingresa al menos un valor > 0"; err.style.display = 'block'; return; }
     err.style.display = 'none';
-
     try {
-        const res = await fetchWithAuth('/api/quotas/batch', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-        });
+        const res = await fetchWithAuth('/api/quotas/batch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         if (res.ok) { closeExactaModal(); loadQuotas(); }
-        else { const d = await res.json().catch(() => ({})); err.innerText = "Error: " + (d.detail || 'Error al guardar'); err.style.display = 'block'; }
+        else { const d = await res.json().catch(() => ({})); err.innerText = "Error: " + (d.detail || 'Error'); err.style.display = 'block'; }
     } catch (e) { console.error(e); err.innerText = "Error de conexi\u00f3n"; err.style.display = 'block'; }
+}
+
+function renderExactaGridHtml(quotas) {
+    const rowMap = new Map();
+    const colOrder = [];
+    const colSeen = new Set();
+    const rowOrder = [];
+
+    quotas.forEach(q => {
+        const rowName = q.point_type;
+        const colName = q.value.split(" | ").slice(1).join(" | ");
+
+        if (!rowMap.has(rowName)) {
+            rowMap.set(rowName, new Map());
+            rowOrder.push(rowName);
+        }
+        rowMap.get(rowName).set(colName, q);
+
+        if (!colSeen.has(colName)) {
+            colSeen.add(colName);
+            colOrder.push(colName);
+        }
+    });
+
+    let html = '<div class="htable-container" style="border-width:2px;border-color:#f59e0b;"><div class="htable-root-groups"><div class="htable-group"><div class="htable-cols-container">';
+    html += '<div class="htable-cols-row header-row" style="background:#fef3c7;">';
+    html += '<div style="min-width:150px;font-weight:800;">Punto</div>';
+    colOrder.forEach(col => {
+        html += '<div style="white-space:nowrap;font-weight:700;">' + col + '</div>';
+    });
+    html += '</div>';
+
+    rowOrder.forEach(rowName => {
+        html += '<div class="htable-cols-row body-row">';
+        html += '<div style="font-weight:700;text-align:center;">' + rowName + '</div>';
+        colOrder.forEach(colName => {
+            const q = rowMap.get(rowName).get(colName);
+            if (q) {
+                const t = q.target_count;
+                const cur = q.current_count;
+                const percent = t > 0 ? Math.min(100, Math.round((cur / t) * 100)) : 0;
+                let color = '#ef4444';
+                if (percent >= 100) color = '#3b82f6';
+                else if (percent >= 80) color = '#22c55e';
+                else if (percent >= 50) color = '#f59e0b';
+                html += '<div><div class="val-container"><div class="val-disp">' + cur + '</div><div class="val-target">/ ' + t + '</div></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:' + percent + '%;background:' + color + ';"></div></div></div>';
+            } else {
+                html += '<div style="color:#94a3b8;font-style:italic;text-align:center;">—</div>';
+            }
+        });
+        html += '</div>';
+    });
+
+    html += '</div></div></div></div>';
+    return html;
 }
 
 function renderTdcGridHtml(quotas) {
