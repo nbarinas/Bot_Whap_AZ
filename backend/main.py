@@ -2209,7 +2209,7 @@ def get_daily_active_phones_for_study(db, study_code):
     phones = [p[0] for p in subscribers if p[0]]
     
     # Super Observers: These numbers receive all updates for all active studies
-    admin_observers = ["573234968972", "573158160379", "573057795561"]
+    admin_observers = ["573234968972", "573158160379", "573057795561", "573136623816"]
     for admin in admin_observers:
         if admin not in phones:
             phones.append(admin)
