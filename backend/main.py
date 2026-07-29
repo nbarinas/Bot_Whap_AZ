@@ -2069,11 +2069,10 @@ def send_quota_report_to_agents(db, study_code, phones, caption=""):
         # 1. Get components for the image
         all_study_quotas = db.query(models.BotQuota).filter(
             models.BotQuota.study_code == study_code,
-            ~models.BotQuota.value.startswith("Censos"),
-            models.BotQuota.category != "Exacta"
+            ~models.BotQuota.value.startswith("Censos")
         ).all()
         if not all_study_quotas:
-            msg = f"📊 *{study_code.upper()}* no tiene cuotas disponibles para registrar. Las cuotas exactas se gestionan desde el panel web."
+            msg = f"📊 No se encontraron cuotas para *{study_code.upper()}*."
             for p in phones:
                 try: send_whatsapp_message(p, msg)
                 except Exception as ex: print(f"Error notifying {p}: {ex}")
@@ -2111,16 +2110,44 @@ def send_quota_report_to_agents(db, study_code, phones, caption=""):
             ordered_lns = {fn: sorted(list(col_tree[fn])) for fn in ordered_fns}
             return data_map, ordered_fns, ordered_lns, sorted(list(row_keys))
 
+        def build_exacta_sec_data(quotas):
+            col_tree = {}
+            row_keys = set()
+            data_map = {}
+            for q in quotas:
+                row_name = q.point_type or "General"
+                col_part = q.value.split(" | ", 1)[1] if " | " in q.value else q.value
+                parts = col_part.split(" \u00b7 ")
+                col_val = parts[0].strip()
+                inner_val = " \u00b7 ".join(parts[1:]).strip() if len(parts) > 1 else "-"
+                first_node = col_val
+                middle_str = row_name
+                leaf_node = inner_val
+                if first_node not in col_tree: col_tree[first_node] = set()
+                col_tree[first_node].add(leaf_node)
+                row_keys.add(middle_str)
+                if middle_str not in data_map: data_map[middle_str] = {}
+                if first_node not in data_map[middle_str]: data_map[middle_str][first_node] = {}
+                data_map[middle_str][first_node][leaf_node] = {'current': q.current_count, 'target': q.target_count}
+            ordered_fns = sorted(list(col_tree.keys()))
+            ordered_lns = {fn: sorted(list(col_tree[fn])) for fn in ordered_fns}
+            return data_map, ordered_fns, ordered_lns, sorted(list(row_keys))
+
         standard_sections = []
-        std_quotas = [q for q in all_study_quotas if q.category != "Tipo de Punto"]
+        std_quotas = [q for q in all_study_quotas if q.category not in ("Tipo de Punto", "Exacta")]
         if std_quotas:
             dm, ofn, oln, sr = build_sec_data(std_quotas)
-            standard_sections.append({ 'title': 'Cuota Demográfica', 'data_map': dm, 'ordered_first_nodes': ofn, 'ordered_leaf_nodes': oln, 'sorted_rows': sr })
+            standard_sections.append({ 'title': 'Cuota Demogr\u00e1fica', 'data_map': dm, 'ordered_first_nodes': ofn, 'ordered_leaf_nodes': oln, 'sorted_rows': sr })
         
         pt_quotas = [q for q in all_study_quotas if q.category == "Tipo de Punto"]
         if pt_quotas:
             dm, ofn, oln, sr = build_sec_data(pt_quotas)
             standard_sections.append({ 'title': 'Cuota Tipos de Puntos', 'data_map': dm, 'ordered_first_nodes': ofn, 'ordered_leaf_nodes': oln, 'sorted_rows': sr })
+
+        exacta_quotas = [q for q in all_study_quotas if q.category == "Exacta"]
+        if exacta_quotas:
+            dm, ofn, oln, sr = build_exacta_sec_data(exacta_quotas)
+            standard_sections.append({ 'title': 'Cuota Exacta', 'data_map': dm, 'ordered_first_nodes': ofn, 'ordered_leaf_nodes': oln, 'sorted_rows': sr })
 
         # 2. Determine who needs what
         has_pilot = any(p in PILOT_PHONES for p in phones)
@@ -2792,8 +2819,7 @@ def build_study_quota_sections(db, study_code):
     """
     all_study_quotas = db.query(models.BotQuota).filter(
         models.BotQuota.study_code == study_code,
-        ~models.BotQuota.value.startswith("Censos"),
-        models.BotQuota.category != "Exacta"
+        ~models.BotQuota.value.startswith("Censos")
     ).all()
 
     if not all_study_quotas:
@@ -2835,12 +2861,35 @@ def build_study_quota_sections(db, study_code):
         ordered_lns = {fn: sorted(list(col_tree[fn])) for fn in ordered_fns}
         return data_map, ordered_fns, ordered_lns, sorted(list(row_keys))
 
+    def build_exacta_sec_data(quotas):
+        col_tree = {}
+        row_keys = set()
+        data_map = {}
+        for q in quotas:
+            row_name = q.point_type or "General"
+            col_part = q.value.split(" | ", 1)[1] if " | " in q.value else q.value
+            parts = col_part.split(" \u00b7 ")
+            col_val = parts[0].strip()
+            inner_val = " \u00b7 ".join(parts[1:]).strip() if len(parts) > 1 else "-"
+            first_node = col_val
+            middle_str = row_name
+            leaf_node = inner_val
+            if first_node not in col_tree: col_tree[first_node] = set()
+            col_tree[first_node].add(leaf_node)
+            row_keys.add(middle_str)
+            if middle_str not in data_map: data_map[middle_str] = {}
+            if first_node not in data_map[middle_str]: data_map[middle_str][first_node] = {}
+            data_map[middle_str][first_node][leaf_node] = {'current': q.current_count, 'target': q.target_count}
+        ordered_fns = sorted(list(col_tree.keys()))
+        ordered_lns = {fn: sorted(list(col_tree[fn])) for fn in ordered_fns}
+        return data_map, ordered_fns, ordered_lns, sorted(list(row_keys))
+
     sections = []
-    std_quotas = [q for q in all_study_quotas if q.category != "Tipo de Punto"]
+    std_quotas = [q for q in all_study_quotas if q.category not in ("Tipo de Punto", "Exacta")]
     if std_quotas:
         dm, ofn, oln, sr = build_sec_data(std_quotas)
         sections.append({
-            'title': f'{study_code} - Cuota Demográfica',
+            'title': f'{study_code} - Cuota Demogr\u00e1fica',
             'data_map': dm,
             'ordered_first_nodes': ofn,
             'ordered_leaf_nodes': oln,
@@ -2858,6 +2907,18 @@ def build_study_quota_sections(db, study_code):
             'ordered_leaf_nodes': oln,
             'sorted_rows': sr,
             'header_bg': (0, 82, 162)
+        })
+
+    exacta_quotas = [q for q in all_study_quotas if q.category == "Exacta"]
+    if exacta_quotas:
+        dm, ofn, oln, sr = build_exacta_sec_data(exacta_quotas)
+        sections.append({
+            'title': f'{study_code} - Cuota Exacta',
+            'data_map': dm,
+            'ordered_first_nodes': ofn,
+            'ordered_leaf_nodes': oln,
+            'sorted_rows': sr,
+            'header_bg': (245, 158, 11)
         })
 
     return sections
