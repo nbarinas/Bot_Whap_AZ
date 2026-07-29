@@ -613,9 +613,11 @@ function editStudy(studyId, studyCode) {
                 let hasPointType = false;
 
                 // Identificamos la primera categoría para sumar el total sin duplicar por dimensiones cruzadas
-                const firstStandardCat = quotasArr.find(q => q.category !== "Tipo de Punto" && q.category !== "General")?.category || "General";
+                const firstStandardCat = quotasArr.find(q => q.category !== "Tipo de Punto" && q.category !== "General" && q.category !== "Exacta")?.category || "General";
                 
                 quotasArr.forEach(q => {
+                    if (q.value && q.value.startsWith("Censos")) return;
+                    if (q.category === "Exacta") return;
                     if (q.category === "Tipo de Punto") {
                         hasPointType = true;
                         if (q.value) customPoints.add(q.value);

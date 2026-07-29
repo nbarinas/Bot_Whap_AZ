@@ -2069,7 +2069,8 @@ def send_quota_report_to_agents(db, study_code, phones, caption=""):
         # 1. Get components for the image
         all_study_quotas = db.query(models.BotQuota).filter(
             models.BotQuota.study_code == study_code,
-            ~models.BotQuota.value.startswith("Censos")
+            ~models.BotQuota.value.startswith("Censos"),
+            models.BotQuota.category != "Exacta"
         ).all()
         if not all_study_quotas:
             print(f"DEBUG: No quotas found for study {study_code}")
@@ -2195,7 +2196,8 @@ def build_study_report(db, study_code):
     
     all_study_quotas = db.query(models.BotQuota).filter(
         models.BotQuota.study_code == study_code,
-        ~models.BotQuota.value.startswith("Censos")
+        ~models.BotQuota.value.startswith("Censos"),
+        models.BotQuota.category != "Exacta"
     ).all()
     quota_ids = [q.id for q in all_study_quotas]
     
@@ -2387,7 +2389,10 @@ def check_free_text_quota(db, study_code: str, msg: str):
                 except (ValueError, TypeError): pass
         return matches
 
-    quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
+    quotas = db.query(models.BotQuota).filter(
+        models.BotQuota.study_code == study_code,
+        models.BotQuota.category != "Exacta"
+    ).all()
     standard_matches = []
     point_matches = []
     
@@ -2518,7 +2523,10 @@ def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tupl
     selected_path = ctx.get("selected_path", [])
     pending_ids = ctx.get("interactive_quota_ids", [])
     
-    all_quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
+    all_quotas = db.query(models.BotQuota).filter(
+        models.BotQuota.study_code == study_code,
+        models.BotQuota.category != "Exacta"
+    ).all()
     
     # Determine what categories we still need to fulfill
     has_pt = any(q.category == "Tipo de Punto" for q in all_quotas)
@@ -2781,7 +2789,8 @@ def build_study_quota_sections(db, study_code):
     """
     all_study_quotas = db.query(models.BotQuota).filter(
         models.BotQuota.study_code == study_code,
-        ~models.BotQuota.value.startswith("Censos")
+        ~models.BotQuota.value.startswith("Censos"),
+        models.BotQuota.category != "Exacta"
     ).all()
 
     if not all_study_quotas:
