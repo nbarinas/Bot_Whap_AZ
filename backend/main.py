@@ -2073,7 +2073,10 @@ def send_quota_report_to_agents(db, study_code, phones, caption=""):
             models.BotQuota.category != "Exacta"
         ).all()
         if not all_study_quotas:
-            print(f"DEBUG: No quotas found for study {study_code}")
+            msg = f"📊 *{study_code.upper()}* no tiene cuotas disponibles para registrar. Las cuotas exactas se gestionan desde el panel web."
+            for p in phones:
+                try: send_whatsapp_message(p, msg)
+                except Exception as ex: print(f"Error notifying {p}: {ex}")
             return
             
         def build_sec_data(quotas):

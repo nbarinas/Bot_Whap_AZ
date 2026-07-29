@@ -25,3 +25,4 @@ rename.py
 .vscode/
 .DS_Store
 .idea/
+*.jpeg
