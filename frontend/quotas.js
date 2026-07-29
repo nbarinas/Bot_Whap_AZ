@@ -71,7 +71,9 @@ async function loadQuotas() {
             quotas.forEach(q => {
                 if (q.value && q.value.startsWith("Censos")) return;
                 
-                if (q.category === "Tipo de Punto") {
+                if (q.category === "Exacta") {
+                    exactaQuotas.push(q);
+                } else if (q.category === "Tipo de Punto") {
                     if (q.value && q.value.includes(" | ")) {
                         exactaQuotas.push(q);
                     } else {
@@ -1156,7 +1158,7 @@ async function saveExactaQuotas() {
         const row = rows[ri], v = parseInt(inp.value, 10);
         if (!row || !cl || isNaN(v) || v <= 0) return;
         hasVals = true;
-        payload.push({ study_code: sc, category: "Tipo de Punto", value: row + " | " + cl, target_count: v, point_type: row });
+        payload.push({ study_code: sc, category: "Exacta", value: row + " | " + cl, target_count: v, point_type: row });
     });
     if (!hasVals) { err.innerText = "Ingresa al menos un valor > 0"; err.style.display = 'block'; return; }
     err.style.display = 'none';
