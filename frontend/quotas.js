@@ -1111,6 +1111,15 @@ function addExactaNse() {
     }
 }
 
+function addExactaValor(dimId) {
+    const dim = exactaEDims.find(d => d.id === dimId);
+    if (dim) {
+        dim.values.push(dimId === 'genero' ? "Otro" : "Nuevo rango");
+        exactaEDeletedCols.clear();
+        renderExactaTable();
+    }
+}
+
 function removeExactaPoint(idx) {
     if (!confirm("Eliminar \"" + exactaEPoints[idx] + "\" y todas sus celdas?")) return;
     exactaEPoints.splice(idx, 1);
