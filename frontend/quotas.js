@@ -126,15 +126,16 @@ async function loadQuotas() {
                 </div>
                 <div style="display: flex; flex-wrap: wrap; gap: 20px; padding: 15px; background: #fff; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; ${isClosed ? 'opacity:0.6; pointer-events:none;' : ''}">
                     ${exactaHtml || ptHtml ? `
-                    <div style="flex: 1 1 300px; min-width: 300px;">
+                    <div style="flex: ${stdHtml ? '1 1 300px' : '1'}; min-width: 300px;">
                         <h4 style="color:var(--primary); margin-bottom:0.8rem; font-size:1rem;"><i class="fas fa-map-marker-alt"></i> Cuota de Tipos de Puntos</h4>
                         <div class="htable-root-groups" style="border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;">${exactaHtml}${ptHtml}</div>
                     </div>` : ""}
                     
+                    ${stdHtml ? `
                     <div style="flex: 2 1 600px; min-width: 400px;">
                         <h4 style="color:var(--primary); margin-bottom:0.8rem; font-size:1rem;"><i class="fas fa-users"></i> Cuota Cuadro Demográfico</h4>
                         <div class="htable-root-groups" style="border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;">${stdHtml}</div>
-                    </div>
+                    </div>` : ""}
                 </div>
             `;
             container.appendChild(studyWrapper);
