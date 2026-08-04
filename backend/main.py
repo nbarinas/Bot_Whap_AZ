@@ -32,6 +32,17 @@ app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 import asyncio
 from datetime import datetime, timedelta
 
+
+def _format_validation_date(value):
+    """Convierte un valor de fecha (datetime o string) a 'YYYY-MM-DD'."""
+    if value is None:
+        return "desconocida"
+    if isinstance(value, datetime):
+        return value.strftime('%Y-%m-%d')
+    # SQLite y algunas bases devuelven la fecha como string
+    return str(value)[:10]
+
+
 async def call_reminder_task():
     while True:
         try:
@@ -1698,34 +1709,35 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                 if val_phone.startswith("57") and len(val_phone) == 12:
                     val_phone = val_phone[2:]
             
-                # Busco en base de datos calls
+                # Busco en base de datos calls (igual que el validador de duplicados de az)
                 calls_sql = text("""
                     SELECT c.created_at, s.name as study_name
                     FROM calls c
                     LEFT JOIN studies s ON c.study_id = s.id
                     WHERE c.phone_number = :p OR c.phone_number = :np
-                    ORDER BY s.created_at DESC, c.id DESC
+                       OR c.whatsapp = :p OR c.whatsapp = :np
+                    ORDER BY c.created_at DESC, c.id DESC
                 """)
                 records = db_users.execute(calls_sql, {"p": val_phone, "np": "57" + val_phone}).fetchall()
                 if records:
                     total_count = len(records)
                     latest = records[0]
-                    latest_date_str = latest.created_at.strftime('%Y-%m-%d') if latest.created_at else "desconocida"
+                    latest_date_str = _format_validation_date(latest.created_at)
                     latest_study = latest.study_name if latest.study_name else "desconocido"
-                
+
                     if total_count == 1:
                         reply = f"⚠️ Ojo, esta persona participó la última vez en la base *{latest_study}* de fecha *{latest_date_str}*.\n\nEn total ha participado 1 vez.\n\n¿Quieres validar otro número?"
                     else:
                         historial = []
                         # Mostramos hasta las últimas 5 adicionales
                         for r in records[1:6]:
-                            d_str = r.created_at.strftime('%Y-%m-%d') if r.created_at else "desconocida"
+                            d_str = _format_validation_date(r.created_at)
                             s_name = r.study_name if r.study_name else "desconocido"
                             historial.append(f"• {s_name} ({d_str})")
-                        
+
                         if total_count > 6:
                             historial.append(f"... y {total_count - 6} más.")
-                        
+
                         historial_str = "\n".join(historial)
                         reply = f"⚠️ Ojo, esta persona participó la última vez en la base *{latest_study}* de fecha *{latest_date_str}*.\n\nEn total ha participado *{total_count} veces*. Historial reciente:\n{historial_str}\n\n¿Quieres validar otro número?"
                 else:
