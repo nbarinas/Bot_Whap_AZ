@@ -2540,7 +2540,7 @@ def validate_and_save_quotas(db, quota_ids, ctx, phone, study_code, sender_label
             q_label = f"{q.category} | {q.value}" if (q.category and q.category != "General") else q.value
             return (
                 f"❌ La cuota *{q_label}* ya está llena ({q.current_count}/{q.target_count}).\n\n"
-                "Si realmente necesitas agregarla, por favor escribe a Armando."
+                "Cuota cerrada. Si la quieres registrar, comunícate con Armando."
             ), None
 
     # Todas disponibles: guardar
@@ -2637,9 +2637,9 @@ def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tupl
                 q_label = f"{quota.category} | {quota.value}" if (quota.category and quota.category != "General") else quota.value
                 err_msg = (
                     f"❌ La cuota *{q_label}* ya está llena ({quota.current_count}/{quota.target_count}).\n\n"
-                    "Si realmente necesitas agregarla, por favor escribe a Armando."
+                    "Cuota cerrada. Si la quieres registrar, comunícate con Armando."
                 )
-                return err_msg, "WAITING_CATEGORY", ctx.get("interactive_fallback")
+                return err_msg, "IDLE", None
             pending_ids.append(quota.id)
         ctx["interactive_quota_ids"] = pending_ids
 
