@@ -643,6 +643,17 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "EAAXs5LUMDHoBQ052ePZAxW647UmCHi8OE
 WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID", "969902462880750")
 WHATSAPP_VERIFY_TOKEN = os.getenv("WHATS_VERIFY_TOKEN", "azbot_secreto_2026")
 
+# BSUID (WhatsApp usernames): cuando un usuario activa su nombre de usuario,
+# Meta ya no manda su teléfono en el webhook, solo envía from_user_id (formato "CO.xxx").
+# Mapa BSUID -> teléfono real para poder identificarlo en users/sesiones mientras se adopta.
+BSUID_TO_PHONE = {
+    "CO.4532628453651912": "3118835568",  # Laura Osorio
+}
+BSUID_RE = re.compile(r'^[A-Za-z]{2}\.[\w.]+$')
+
+def is_bsuid(x):
+    return bool(x) and bool(BSUID_RE.match(x))
+
 def send_whatsapp_message(to_phone: str, message_text: str):
     url = f"https://graph.facebook.com/v22.0/{WHATSAPP_PHONE_ID}/messages"
     headers = {
@@ -651,12 +662,16 @@ def send_whatsapp_message(to_phone: str, message_text: str):
     }
     data = {
         "messaging_product": "whatsapp",
-        "to": to_phone,
         "type": "text",
         "text": {
             "body": message_text
         }
     }
+    if is_bsuid(to_phone):
+        data["recipient_type"] = "individual"
+        data["recipient"] = to_phone
+    else:
+        data["to"] = to_phone
     print(f"DEBUG send_whatsapp_message: to={to_phone}, len={len(message_text)}, body={message_text[:60]}...")
     try:
         response = requests.post(url, headers=headers, data=json.dumps(data))
@@ -684,12 +699,16 @@ def send_whatsapp_media(to_phone: str, media_type: str, media_id: str, caption: 
     
     data = {
         "messaging_product": "whatsapp",
-        "to": to_phone,
         "type": media_type,
         media_type: {
             "id": media_id
         }
     }
+    if is_bsuid(to_phone):
+        data["recipient_type"] = "individual"
+        data["recipient"] = to_phone
+    else:
+        data["to"] = to_phone
     
     if caption and media_type == 'image':
         data["image"]["caption"] = caption
@@ -716,10 +735,14 @@ def send_whatsapp_interactive(to_phone: str, interactive_data: dict):
     }
     data = {
         "messaging_product": "whatsapp",
-        "to": to_phone,
         "type": "interactive",
         "interactive": interactive_data
     }
+    if is_bsuid(to_phone):
+        data["recipient_type"] = "individual"
+        data["recipient"] = to_phone
+    else:
+        data["to"] = to_phone
     try:
         response = requests.post(url, headers=headers, data=json.dumps(data))
         if response.status_code != 200:
@@ -802,11 +825,16 @@ async def receive_whatsapp_webhook(request: Request, db: Session = Depends(datab
                     # Check if it has a message (not just a status update like 'delivered'/'read')
                     if "messages" in value:
                         for msg_data in value["messages"]:
-                            # Meta includes the country code, e.g., "573172376156"
-                            phone = msg_data.get("from")
+                            # Meta includes the country code, e.g., "573172376156".
+                            # Si el usuario activó su "nombre de usuario" (BSUID), ya no manda `from`,
+                            # solo `from_user_id` (formato "CO.xxx").
+                            phone = msg_data.get("from") or msg_data.get("from_user_id")
                             mtype = msg_data.get("type")
                             print(f"INBOUND RAW: from={phone} type={mtype}")
                             print(f"  payload={json.dumps(msg_data, ensure_ascii=False)[:300]}")
+                            if not phone:
+                                print(f"INBOUND SIN IDENTIFICADOR: type={mtype} — se omite")
+                                continue
                             # We handle both text and interactive replies
                             text_msg = ""
                             if msg_data.get("type") == "text":
@@ -986,7 +1014,10 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
     Returns (reply_text, interactive_data_dict)
     """
     msg = message_raw.strip().lower()
-    phone = phone_raw.strip()
+    raw_phone = (phone_raw or "").strip()
+    # Si llega como BSUID (CO.xxx) y lo conocemos, usamos su teléfono real para
+    # reconocerlo/profile y responderle con normalidad.
+    phone = BSUID_TO_PHONE.get(raw_phone, raw_phone)
     
     # Check for numbers saved with or without the '57' prefix
     normalized_phone = phone
