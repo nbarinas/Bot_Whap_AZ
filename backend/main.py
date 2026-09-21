@@ -804,6 +804,9 @@ async def receive_whatsapp_webhook(request: Request, db: Session = Depends(datab
                         for msg_data in value["messages"]:
                             # Meta includes the country code, e.g., "573172376156"
                             phone = msg_data.get("from")
+                            mtype = msg_data.get("type")
+                            print(f"INBOUND RAW: from={phone} type={mtype}")
+                            print(f"  payload={json.dumps(msg_data, ensure_ascii=False)[:300]}")
                             # We handle both text and interactive replies
                             text_msg = ""
                             if msg_data.get("type") == "text":
@@ -831,6 +834,8 @@ async def receive_whatsapp_webhook(request: Request, db: Session = Depends(datab
                             elif msg_data.get("type") == "video":
                                 print(f"Received WhatsApp VIDEO from {phone}")
                                 process_bot_message(phone, "VIDEO_RECEIVED", db, db_users)
+                            else:
+                                print(f"UNHANDLED TYPE from {phone}: {mtype} — ignorado por diseño")
                                 
                     # Tracking Delivery Statuses
                     if "statuses" in value:
@@ -844,6 +849,8 @@ async def receive_whatsapp_webhook(request: Request, db: Session = Depends(datab
                                 
             return {"status": "ok"}
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             print(f"Error processing webhook: {e}")
             return {"status": "error"}
     else:
