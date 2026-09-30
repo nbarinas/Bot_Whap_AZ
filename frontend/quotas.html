@@ -476,6 +476,7 @@
                 <button class="btn-primary" onclick="openTdcModal()" style="background:#8b5cf6;"><i class="fas fa-store"></i> Nuevo TDC</button>
                 <button class="btn-primary" onclick="openModal()">+ Configurar Estudio</button>
                 <button class="btn-primary" onclick="openExactaModal()" style="background:#f59e0b;"><i class="fas fa-bullseye"></i> Exacta</button>
+                <button class="btn-primary" onclick="openCierreModal()" style="background:#0f766e;"><i class="fas fa-clipboard-check"></i> Cierre del día</button>
                 <button onclick="logout()"
                     style="background:var(--danger); color:white; border:none; padding:1rem; border-radius:12px; cursor:pointer; font-weight:700;"><i
                         class="fas fa-sign-out-alt"></i> Salir</button>
@@ -694,7 +695,49 @@
         </div>
     </div>
 
-    <script src="/static/quotas.js?v=27"></script>
+<!-- Cierre Diario Modal -->
+    <div id="cierreModal" class="modal" style="display:none;">
+        <div class="modal-content" style="max-width: 1000px;">
+            <h2 style="margin:0 0 .5rem 0; font-size:1.5rem; font-weight:800; text-align:center; color:#0f766e;">
+                <i class="fas fa-clipboard-check"></i> Cierre Diario de Campo
+            </h2>
+            <p style="text-align:center; color:var(--text-muted); margin-bottom:1rem; font-size:0.85rem;">
+                Quien registra algo en el día queda aquí hasta que envíe su cierre
+                por WhatsApp. El botón verde es cuando las cuentas dan.
+            </p>
+            <div class="modal-body">
+                <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; margin-bottom:12px;">
+                    <div class="form-group" style="margin:0; flex:1; min-width:180px;">
+                        <label>Fecha del cierre</label>
+                        <input type="date" id="cierreFecha">
+                    </div>
+                    <button onclick="cargarCierre()" class="btn-primary" style="background:#0f766e;">
+                        <i class="fas fa-search"></i> Buscar
+                    </button>
+                    <button onclick="descargarCierreImagen()" class="btn-cancel" title="Descarga la imagen">
+                        <i class="fas fa-image"></i> PNG
+                    </button>
+                    <button onclick="descargarCierreExcel()" class="btn-cancel" title="Descarga el Excel">
+                        <i class="fas fa-file-excel"></i> Excel
+                    </button>
+                    <button onclick="enviarCierreWhatsapp()" class="btn-primary" style="background:#059669;">
+                        <i class="fab fa-whatsapp"></i> Enviar
+                    </button>
+                </div>
+
+                <div id="cierreResumen" style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px;"></div>
+                <div id="cierreTabla" style="max-height:260px; overflow-y:auto; border:1px solid var(--border-color); border-radius:10px;"></div>
+                <p style="font-size:0.78rem; color:var(--text-muted); margin:8px 0 0;">
+                    Editar aquí es una corrección del superusuario: no pone al supervisor en verde.
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button onclick="closeCierreModal()" class="btn-cancel">Cerrar</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/quotas.js?v=28"></script>
 </body>
 
 </html>

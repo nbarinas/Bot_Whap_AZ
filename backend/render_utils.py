@@ -1,5 +1,6 @@
 from PIL import Image, ImageDraw, ImageFont
 import os
+import re
 from datetime import datetime
 
 def get_text_size(text, f):
@@ -604,6 +605,286 @@ def generate_unify_selection_image(study_codes, output_path="unify_selection.png
     footer = f"AZ Marketing - {timestamp}"
     fw, _ = get_text_size(footer, footer_font)
     draw.text(((img_w - fw) // 2, img_h - 25), footer, fill=(128, 128, 128), font=footer_font)
+
+    img.save(output_path)
+    return output_path
+
+
+# Motivos de gasto adicional ofrecidos en el formulario del cierre.
+GASTOS_CIERRE = [
+    "Almuerzo", "Refrigerio", "Parqueadero", "Material/insumos",
+    "Fotocopias", "Transporte no reembolsado", "Otro",
+]
+
+
+def _recortar(texto, limite=22):
+    """Recorta para que una columna no desborde la tabla."""
+    texto = str(texto or "")
+    return texto if len(texto) <= limite else texto[: limite - 1] + "\u2026"
+
+
+def _fecha_corta(valor):
+    """'2026-05-13' -> '13/05'. Si no parece una fecha, se devuelve tal cual."""
+    texto = str(valor or "").strip()
+    coincidencia = re.match(r"^(\d{4})-(\d{2})-(\d{2})", texto)
+    if coincidencia:
+        return "{}/{}/{}".format(coincidencia.group(3), coincidencia.group(2), coincidencia.group(1))
+    return texto
+
+
+def _formato_monto(valor):
+    """$25.000 / sin valor cuando no aplica."""
+    if valor is None or valor == "":
+        return ""
+    try:
+        return "$" + "{:,}".format(int(valor)).replace(",", ".")
+    except (TypeError, ValueError):
+        return str(valor)
+
+
+def _filas_cierre(data):
+    """
+    Arma las filas del reporte y su fila TOTAL.
+
+    Las encuestas y los censos se suman sobre todas las filas (son disjuntos).
+    El dinero y los transportes se cuentan UNA vez por persona: solo se suman
+    las filas con is_charging_owner=True, para que quien trabajo en dos estudios
+    no duplique la plata en el TOTAL.
+
+    Returns:
+        (filas, total) donde `total` es un dict con las mismas claves.
+    """
+    # ---- Filas visibles -------------------------------------
+    filas = []
+    for r in data:
+        completo = str(r.get("study_code", "")) or "-"
+        # En el bot el estudio se guarda como un solo texto y por convencion
+        # arranca con su codigo: "1061 ASCENSOR VIVE 100..." -> codigo "1061".
+        # Si no arranca con digitos, no hay codigo que mostrar.
+        coincidencia = re.match(r"^(\d+)\s+(.+)$", completo)
+        if coincidencia:
+            codigo, nombre_estudio = coincidencia.group(1), coincidencia.group(2)
+        else:
+            codigo, nombre_estudio = "", completo
+
+        desajuste = (r.get("surveys_declared") or 0) - (r.get("system_surveys") or 0)
+        # Montos crudos: el TOTAL suma sobre estos, no sobre los strings ya formateados.
+        inc_enc_raw = (r.get("incentive_agent_amount") or 0) if r.get("incentive_agent") else 0
+        inc_sup_raw = (r.get("incentive_supervisor_amount") or 0) if r.get("incentive_supervisor") else 0
+        gasto_raw = r.get("extra_expense_amount") or 0
+
+        filas.append({
+            "estudio": _recortar(nombre_estudio, 20),
+            "fecha": _fecha_corta(r.get("close_date")),
+            "codigo": _recortar(codigo, 20),
+            "supervisor": _recortar(r.get("supervisor", "-"), 18),
+            "encuestador": _recortar(r.get("interviewer", "-"), 18),
+            "inc_enc": _formato_monto(inc_enc_raw) if inc_enc_raw else "No",
+            "inc_sup": _formato_monto(inc_sup_raw) if inc_sup_raw else "No",
+            "t_compl": str(r.get("transport_full") or 0),
+            "t_med": str(r.get("transport_partial") or 0),
+            "gasto": (_recortar(r.get("extra_expense_desc", ""), 12) + " "
+                      + _formato_monto(gasto_raw)) if gasto_raw else "No",
+            "censos": str(r.get("census_declared") or 0),
+            "encuestas": str(r.get("surveys_declared") or 0),
+            "desajuste": desajuste,
+            "owner": bool(r.get("is_charging_owner")),
+            "nota": _recortar(r.get("note", ""), 26),
+            # copias numericas para el TOTAL
+            "inc_enc_raw": inc_enc_raw,
+            "inc_sup_raw": inc_sup_raw,
+            "gasto_raw": gasto_raw,
+            "t_compl_raw": r.get("transport_full") or 0,
+            "t_med_raw": r.get("transport_partial") or 0,
+            "censos_raw": r.get("census_declared") or 0,
+            "encuestas_raw": r.get("surveys_declared") or 0,
+        })
+
+    # ---- TOTALES
+    # 'surveys' y 'census' son disjuntos, asi que su total es la suma de todas
+    # las filas. El dinero y los transportes se cuentan UNA vez por persona:
+    # solo se suman las filas con is_charging_owner=True.
+    totales = {"censos": 0, "encuestas": 0, "t_compl": 0, "t_med": 0,
+               "inc_enc": 0, "inc_sup": 0, "gasto": 0}
+    hay_gasto = False
+    for f in filas:
+        totales["censos"] += f["censos_raw"]
+        totales["encuestas"] += f["encuestas_raw"]
+        if not f["owner"]:
+            continue
+        totales["t_compl"] += f["t_compl_raw"]
+        totales["t_med"] += f["t_med_raw"]
+        totales["inc_enc"] += f["inc_enc_raw"]
+        totales["inc_sup"] += f["inc_sup_raw"]
+        totales["gasto"] += f["gasto_raw"]
+        if f["gasto_raw"]:
+            hay_gasto = True
+
+    total = {
+        "estudio": "TOTAL", "fecha": "", "codigo": "", "supervisor": "", "encuestador": "",
+        "inc_enc": _formato_monto(totales["inc_enc"]) if totales["inc_enc"] else "No",
+        "inc_sup": _formato_monto(totales["inc_sup"]) if totales["inc_sup"] else "No",
+        "t_compl": str(totales["t_compl"]),
+        "t_med": str(totales["t_med"]),
+        "gasto": _formato_monto(totales["gasto"]) if hay_gasto else "No",
+        "censos": str(totales["censos"]),
+        "encuestas": str(totales["encuestas"]),
+        "desajuste": 0,
+        "owner": True, "nota": "",
+    }
+    return filas, total
+
+
+def generate_closing_report_image(data, fecha, output_path="cierre_diario.png"):
+    """
+    Reporte del cierre diario de campo.
+
+    data: lista de dicts con las claves de get_closing_rows(), ya resueltas.
+          Los valores de dinero solo se suman para las filas con
+          is_charging_owner=True, para que alguien que trabajo en dos
+          estudios no duplique la plata en el TOTAL.
+    """
+    from datetime import datetime
+    from PIL import Image, ImageDraw, ImageFont
+
+    PADDING = 24
+    CELL_PAD_H = 9
+    CELL_PAD_V = 9
+    HEADER_BG = (45, 52, 71)
+    HEADER_TEXT = (255, 255, 255)
+    CELL_BG = (255, 255, 255)
+    CELL_BG_ALT = (248, 249, 252)
+    TOTAL_BG = (219, 234, 254)
+    TOTAL_TEXT = (12, 74, 110)
+    SIN_INCENTIVO_BG = (247, 250, 252)
+    WARN_BG = (255, 251, 235)
+    WARN_TEXT = (146, 64, 14)
+    BAD_BG = (254, 226, 226)
+    BAD_TEXT = (153, 27, 27)
+    OK_TEXT = (21, 128, 61)
+    BORDER = (218, 220, 224)
+    TEXT = (60, 64, 67)
+    LABEL = (32, 33, 36)
+
+    font, bold_font, title_font, footer_font = None, None, None, None
+    posibles = [
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    posibles_bold = [
+        "C:\\Windows\\Fonts\\arialbd.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ]
+    for ruta in posibles:
+        if os.path.exists(ruta):
+            font = ImageFont.truetype(ruta, 14)
+            footer_font = ImageFont.truetype(ruta, 12)
+            break
+    for ruta in posibles_bold:
+        if os.path.exists(ruta):
+            bold_font = ImageFont.truetype(ruta, 14)
+            title_font = ImageFont.truetype(ruta, 21)
+            break
+    if not font:
+        font = footer_font = ImageFont.load_default()
+    if not bold_font:
+        bold_font = title_font = ImageFont.load_default()
+
+    def ancho(txt, f):
+        return get_text_size(txt, f)[0]
+
+    filas, total = _filas_cierre(data)
+    todas = filas + [total]
+
+    headers = ["Estudio", "Fecha", "Código", "Supervisor", "Encuestador", "Incent. Enc",
+                   "Incent. Sup", "T. compl", "T. medio", "Gasto adic.",
+                   "Censos", "Encuestas"]
+    keys = ["estudio", "fecha", "codigo", "supervisor", "encuestador", "inc_enc", "inc_sup",
+            "t_compl", "t_med", "gasto", "censos", "encuestas"]
+    texto_izq = {"estudio", "codigo", "supervisor", "encuestador", "gasto"}
+
+    # ---- Anchos de columna -------------------------------------------
+    anchos = []
+    for i, h in enumerate(headers):
+        max_w = ancho(h, bold_font)
+        for r in todas:
+            max_w = max(max_w, ancho(str(r.get(keys[i], "")), bold_font))
+        anchos.append(max_w + 2 * CELL_PAD_H)
+
+    row_h = get_text_size("AnyText", bold_font)[1] + 2 * CELL_PAD_V
+    tabla_w = sum(anchos)
+    img_w = max(760, tabla_w + 2 * PADDING)
+    header_h = 82
+    footer_h = 52
+    img_h = header_h + footer_h + (len(todas) + 1) * row_h + 2 * PADDING
+
+    img = Image.new("RGB", (img_w, img_h), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
+
+    # ---- Titulo -------------------------------------------------------
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    titulo = "CIERRE DIARIO DE CAMPO - {}".format(fecha)
+    tw, _ = get_text_size(titulo, title_font)
+    draw.text(((img_w - tw) // 2, 18), titulo, fill=LABEL, font=title_font)
+
+    subtitulo = "Generado {}  |  {} persona(s)  |  valores de dinero contados una vez por persona".format(stamp, len(filas))
+    sw, _ = get_text_size(subtitulo, footer_font)
+    draw.text(((img_w - sw) // 2, 46), subtitulo, fill=(120, 120, 120), font=footer_font)
+
+    y = header_h
+    x0 = (img_w - tabla_w) // 2
+
+    # ---- Encabezado de tabla ------------------------------------------
+    cx = x0
+    for i, h in enumerate(headers):
+        cw = anchos[i]
+        draw.rectangle([cx, y, cx + cw, y + row_h], fill=HEADER_BG, outline=BORDER)
+        hw, hh = get_text_size(h, bold_font)
+        draw.text((cx + (cw - hw) // 2, y + (row_h - hh) // 2), h,
+                  fill=HEADER_TEXT, font=bold_font)
+        cx += cw
+    y += row_h
+
+    # ---- Filas --------------------------------------------------------
+    for idx, r in enumerate(todas):
+        es_total = r is total
+        bg = TOTAL_BG if es_total else (CELL_BG if idx % 2 == 0 else CELL_BG_ALT)
+        cx = x0
+        for i, key in enumerate(keys):
+            cw = anchos[i]
+            val = str(r.get(key, ""))
+            f = bold_font if es_total else font
+            cell_bg, color = bg, TEXT
+
+            if not es_total:
+                if key in ("inc_enc", "inc_sup") and val == "No":
+                    cell_bg, color = SIN_INCENTIVO_BG, (150, 155, 162)
+                if key in ("t_compl", "t_med") and val != "0":
+                    color = OK_TEXT
+                if r.get("desajuste"):
+                    cell_bg, color = BAD_BG, BAD_TEXT
+
+            draw.rectangle([cx, y, cx + cw, y + row_h], fill=cell_bg, outline=BORDER)
+            vw, vh = get_text_size(val, f)
+            tx = cx + CELL_PAD_H if key in texto_izq else cx + (cw - vw) // 2
+            draw.text((tx, y + (row_h - vh) // 2), val, fill=color, font=f)
+            cx += cw
+
+        # Marca de desajuste al final de la fila
+        if not es_total and r.get("desajuste"):
+            marca = "desajuste {:+d}".format(r["desajuste"])
+            mw, mh = get_text_size(marca, footer_font)
+            mx = x0 + tabla_w + 8
+            if mx + mw < img_w:
+                draw.text((mx, y + (row_h - mh) // 2), marca, fill=BAD_TEXT, font=footer_font)
+        y += row_h
+
+    # ---- Pie ----------------------------------------------------------
+    pie = "Reporte automático AZ Marketing - {}".format(stamp)
+    pw, _ = get_text_size(pie, footer_font)
+    draw.text(((img_w - pw) // 2, img_h - 30), pie, fill=(128, 128, 128), font=footer_font)
 
     img.save(output_path)
     return output_path

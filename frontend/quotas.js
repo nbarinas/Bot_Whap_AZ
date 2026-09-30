@@ -1268,3 +1268,152 @@ function renderTdcGridHtml(quotas) {
     html += '</div>';
     return html;
 }
+
+// ============================================================
+// CIERRE DIARIO DE CAMPO
+// Quien registro algo y si ya mando su cierre. El verde no se
+// toca desde aca: solo responde el supervisor por WhatsApp.
+// ============================================================
+
+function _cierreHoy() {
+    // El dia del cierre es el de Colombia (UTC-5), no el UTC del navegador:
+    // despues de las 19:00 hora local `toISOString` ya devuelve el manana.
+    const d = new Date();
+    return new Date(d.getTime() - 5 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+
+function openCierreModal() {
+    document.getElementById('cierreModal').style.display = 'flex';
+    const campo = document.getElementById('cierreFecha');
+    if (!campo.value) campo.value = _cierreHoy();
+    cargarCierre();
+}
+
+function closeCierreModal() {
+    document.getElementById('cierreModal').style.display = 'none';
+}
+
+async function cargarCierre() {
+    const fecha = document.getElementById('cierreFecha').value;
+    if (!fecha) return;
+
+    const resumen = document.getElementById('cierreResumen');
+    const tabla = document.getElementById('cierreTabla');
+    resumen.innerHTML = '';
+    tabla.innerHTML = '<p style="padding:1rem; text-align:center;">Cargando...</p>';
+
+    let datos;
+    try {
+        const r = await fetchWithAuth(`/api/closing/pending?fecha=${encodeURIComponent(fecha)}`);
+        if (!r.ok) {
+            const e = await r.json().catch(() => ({}));
+            tabla.innerHTML = `<p style="padding:1rem; text-align:center; color:var(--danger);">${e.detail || 'No se pudo leer el cierre.'}</p>`;
+            return;
+        }
+        datos = await r.json();
+    } catch (err) {
+        tabla.innerHTML = `<p style="padding:1rem; text-align:center; color:var(--danger);">${err.message}</p>`;
+        return;
+    }
+
+    const tarjetas = [
+        { t: 'Registraron', v: datos.total, c: '#0f172a' },
+        { t: 'Enviaron', v: datos.enviados, c: '#059669' },
+        { t: 'A medio camino', v: datos.en_proceso || 0, c: '#f59e0b' },
+        { t: 'Faltan', v: datos.faltantes, c: '#dc2626' },
+    ];
+    resumen.innerHTML = tarjetas.map(c => `
+        <div style="flex:1; min-width:110px; background:#f8fafc; border:1px solid var(--border-color); border-radius:10px; padding:.6rem; text-align:center;">
+            <div style="font-size:.7rem; color:var(--text-muted); text-transform:uppercase;">${c.t}</div>
+            <div style="font-size:1.6rem; font-weight:900; color:${c.c}; line-height:1.1;">${c.v}</div>
+        </div>`).join('');
+
+    if (!datos.supervisores.length) {
+        tabla.innerHTML = '<p style="padding:1rem; text-align:center; color:var(--text-muted);">Ese día nadie registró cuotas.</p>';
+        return;
+    }
+
+    const filas = datos.supervisores.map(s => {
+        const estado = s.enviado
+            ? '<span style="background:#d1fae5; color:#065f46; padding:2px 8px; border-radius:999px; font-weight:700; font-size:.75rem;">cerró</span>'
+            : (s.en_proceso
+                ? '<span style="background:#fef3c7; color:#92400e; padding:2px 8px; border-radius:999px; font-weight:700; font-size:.75rem;">a medias</span>'
+                : '<span style="background:#fee2e2; color:#991b1b; padding:2px 8px; border-radius:999px; font-weight:700; font-size:.75rem;">esperando</span>');
+        const estudios = Object.entries(s.studies || {})
+            .map(([e, v]) => `${e} (${v.surveys})`).join('<br>');
+        return `
+            <tr style="border-bottom:1px solid #e2e8f0;">
+                <td style="padding:.5rem; font-family:monospace; font-size:.8rem;">${s.phone}</td>
+                <td style="padding:.5rem; font-weight:600;">${s.supervisor || '—'}</td>
+                <td style="padding:.5rem; font-size:.82rem;">${estudios}</td>
+                <td style="padding:.5rem; text-align:center; font-weight:700;">${s.surveys}</td>
+                <td style="padding:.5rem; text-align:center;">${estado}</td>
+            </tr>`;
+    }).join('');
+
+    tabla.innerHTML = `
+        <table style="width:100%; border-collapse:collapse; font-size:.85rem;">
+            <thead style="position:sticky; top:0; background:#f1f5f9;">
+                <tr>
+                    <th style="text-align:left; padding:.5rem;">Teléfono</th>
+                    <th style="text-align:left; padding:.5rem;">Supervisor</th>
+                    <th style="text-align:left; padding:.5rem;">Estudios</th>
+                    <th style="text-align:center; padding:.5rem;">Encuestas</th>
+                    <th style="text-align:center; padding:.5rem;">Estado</th>
+                </tr>
+            </thead>
+            <tbody>${filas}</tbody>
+        </table>`;
+}
+
+async function _descargarCierre(ruta, nombre, abrir) {
+    const fecha = document.getElementById('cierreFecha').value;
+    const r = await fetchWithAuth(`${ruta}?fecha=${encodeURIComponent(fecha)}`);
+    if (!r.ok) {
+        const e = await r.json().catch(() => ({}));
+        alert(e.detail || 'Ese día todavía no tiene cierre guardado.');
+        return;
+    }
+    const blob = await r.blob();
+    if (abrir) {
+        window.open(URL.createObjectURL(blob), '_blank');
+        return;
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `cierre_${fecha}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+}
+
+function descargarCierreImagen() {
+    return _descargarCierre('/api/closing/report/image', null, true);
+}
+
+function descargarCierreExcel() {
+    return _descargarCierre('/api/closing/report/excel', null, false);
+}
+
+async function enviarCierreWhatsapp() {
+    const fecha = document.getElementById('cierreFecha').value;
+    if (!confirm(`¿Enviar el cierre del ${fecha} a superusuario y observadores por WhatsApp?`)) return;
+
+    const r = await fetchWithAuth(`/api/closing/broadcast?fecha=${encodeURIComponent(fecha)}`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+        alert(d.detail || 'No se pudo enviar el cierre.');
+        return;
+    }
+
+    const partes = [`Enviado a ${d.enviados_a.length} persona(s).`];
+    if (d.faltantes && d.faltantes.length) {
+        partes.push(`Todavía faltan ${d.faltantes.length} supervisor(es): ${d.faltantes.join(', ')}`);
+    } else {
+        partes.push('Todos los supervisores reportaron.');
+    }
+    if (d.errores && d.errores.length) partes.push(`Fallaron: ${d.errores.join(', ')}`);
+    alert(partes.join('\n'));
+    cargarCierre();
+}

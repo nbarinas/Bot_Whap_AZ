@@ -12,6 +12,12 @@ class User(UsersBase):
     role = Column(String(50))
     phone_number = Column(String(20))
     last_seen = Column(DateTime)
+    # La tabla `users` ya traia estas columnas; el modelo no las declaraba y
+    # por eso el buscador de nombres y los reportes salian vacios.
+    full_name = Column(String(255), nullable=True)
+    city = Column(String(100), nullable=True)
+    address = Column(String(255), nullable=True)
+    photo_base64 = Column(Text, nullable=True)
 
 class BotStudy(Base):
     __tablename__ = "bot_studies"
@@ -114,3 +120,42 @@ class BotStudySubscription(Base):
     subscribed_at = Column(DateTime(timezone=True), server_default=func.now())
     
     study = relationship("BotStudy", back_populates="subscriptions")
+
+class BotClosingRow(Base):
+    """Cierre diario de campo: una fila por persona + dia + estudio.
+
+    No se guardan nombres: solo los `users.id`. El formulario siempre elige
+    del roster existente (`buscar_personas`), asi que el id siempre esta.
+    Los nombres se resuelven al leer con `_nombre_de_usuario`.
+    """
+    __tablename__ = "bot_closing_rows"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    close_date = Column(String(10), index=True)          # YYYY-MM-DD (hora Colombia)
+    study_code = Column(String(50), index=True)
+    
+    supervisor_id = Column(Integer, index=True, nullable=True)    # users.id
+    interviewer_id = Column(Integer, index=True, nullable=True)   # users.id
+    
+    # Lo que declara el supervisor (censos) contra lo que tiene el sistema (encuestas)
+    surveys_declared = Column(Integer, default=0)   # VINCULANTE: debe sumar el total real
+    census_declared = Column(Integer, default=0)    # informativo, no se valida
+    system_surveys = Column(Integer, default=0)     # foto del sistema al momento de guardar
+    system_census = Column(Integer, default=0)
+    
+    # Dinero del dia (se pregunta una vez por persona, no por estudio)
+    incentive_agent = Column(Integer, default=0)           # 0 = no, 1 = si
+    incentive_agent_amount = Column(Integer, nullable=True)
+    incentive_supervisor = Column(Integer, default=0)      # 0 = no, 1 = si
+    incentive_supervisor_amount = Column(Integer, nullable=True)
+    transport_full = Column(Integer, default=0)            # transportes completos pagados
+    transport_partial = Column(Integer, default=0)         # transportes medios
+    extra_expense_desc = Column(String(150), nullable=True)
+    extra_expense_amount = Column(Integer, nullable=True)
+    
+    # 1 en la primera fila del dia de la persona, para que el TOTAL no duplique la plata
+    is_charging_owner = Column(Integer, default=1)
+    
+    note = Column(Text, nullable=True)
+    filled_by = Column(String(50), nullable=True)         # telefono del supervisor que lleno
+    filled_at = Column(DateTime(timezone=True), server_default=func.now())
