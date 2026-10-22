@@ -652,6 +652,7 @@ WHATSAPP_VERIFY_TOKEN = os.getenv("WHATS_VERIFY_TOKEN", "azbot_secreto_2026")
 # Mapa BSUID -> teléfono real para poder identificarlo en users/sesiones mientras se adopta.
 BSUID_TO_PHONE = {
     "CO.4532628453651912": "3118835568",  # Laura Osorio
+    "CO.1129478899595476": "3227828125",  # Camila Montañez
 }
 BSUID_RE = re.compile(r'^[A-Za-z]{2}\.[\w.]+$')
 
