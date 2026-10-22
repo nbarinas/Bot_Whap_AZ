@@ -650,9 +650,11 @@ WHATSAPP_VERIFY_TOKEN = os.getenv("WHATS_VERIFY_TOKEN", "azbot_secreto_2026")
 # BSUID (WhatsApp usernames): cuando un usuario activa su nombre de usuario,
 # Meta ya no manda su teléfono en el webhook, solo envía from_user_id (formato "CO.xxx").
 # Mapa BSUID -> teléfono real para poder identificarlo en users/sesiones mientras se adopta.
+# El valor va en formato Meta (país + número, sin '+'), igual que el `from` del webhook:
+# `users.phone_number` guarda 10 dígitos y Meta no entrega un número sin indicativo (error 131026).
 BSUID_TO_PHONE = {
-    "CO.4532628453651912": "3118835568",  # Laura Osorio
-    "CO.1129478899595476": "3227828125",  # Camila Montañez
+    "CO.4532628453651912": "573118835568",  # Laura Osorio
+    "CO.1129478899595476": "573227828125",  # Camila Montañez
 }
 BSUID_RE = re.compile(r'^[A-Za-z]{2}\.[\w.]+$')
 
