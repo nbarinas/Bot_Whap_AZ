@@ -7,7 +7,7 @@ from typing import Optional
 import os
 from fastapi.security import OAuth2PasswordRequestForm
 
-from . import models, database, auth, render_utils, upload_media, closing, closing_flow
+from . import models, database, auth, render_utils, upload_media
 import re
 import io
 import csv
@@ -17,10 +17,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.join(os.path.dirname(BASE_DIR), "frontend")
 
 app = FastAPI()
-
-# El router del cierre importa de main (los destinatarios y el envio de
-# imagenes), asi que se registra al final, despues de que main este completo.
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -661,34 +657,6 @@ BSUID_RE = re.compile(r'^[A-Za-z]{2}\.[\w.]+$')
 def is_bsuid(x):
     return bool(x) and bool(BSUID_RE.match(x))
 
-# Super Observadores: reciben todos los reportes de todos los estudios.
-# No participan del cierre diario: no llenan el cierre, solo lo observan.
-ADMIN_OBSERVERS = ["573234968972", "573158160379", "573057795561", "573136623816"]
-
-def es_observador(phone: str, normalized_phone: str = "") -> bool:
-    """
-    Los observadores ven los reportes pero no participan del cierre diario.
-
-    `users` guarda '3057795561' (10 digitos) y Meta guarda '573057795561':
-    sin normalizar, un observador no se reconoceria a si mismo y le
-    apareceria el formulario de cierre.
-    """
-    candidatos = {
-        closing.normalizar_telefono(phone),
-        closing.normalizar_telefono(normalized_phone),
-    }
-    return bool(candidatos & set(ADMIN_OBSERVERS))
-
-# A quien le llega el reporte de cierre del dia: superusuario + observadores.
-# Los tres superusuarios de `users` (Armando, Johana y Sandra) ya son
-# observadores, asi que esta lista y ADMIN_OBSERVERS coinciden. Todo en
-# formato Meta: 573 + 10 digitos.
-CLOSING_RECIPIENTS = list(ADMIN_OBSERVERS)
-
-# Zona horaria de operacion del estudio: Colombia (UTC-5).
-UTC_OFFSET_HORAS = 5
-
-
 def send_whatsapp_message(to_phone: str, message_text: str):
     url = f"https://graph.facebook.com/v22.0/{WHATSAPP_PHONE_ID}/messages"
     headers = {
@@ -1043,28 +1011,6 @@ def build_agent_main_menu(db, phone, user_record, agent_name, is_active, active_
     return reply, interactive_data, ctx, menu_options
 
 
-def manejar_cierre(db, db_users, phone, state, ctx, msg):
-    """
-    El cierre diario de campo, como arbol de estados propio.
-
-    Entra solo quien registro algo hoy y no es observador: un observador recibe
-    el reporte pero no tiene nada que declarar. No hay palabra clave ni boton,
-    `process_bot_message` lo arranca solo. 'corregir' vuelve a empezar el reparto
-    desde cero sin duplicar lo ya escrito.
-    """
-    fecha = ctx.get("cierre_fecha") or closing.colombia_hoy()
-
-    if msg == "corregir":
-        # Volver a empezar: `iniciar` ya devuelve el estado y el texto del
-        # primer paso, no hay nada que recalcular.
-        return closing_flow.iniciar(db, db_users, phone, fecha)
-
-    if str(state or "").startswith("CIERRE_"):
-        return closing_flow.paso(db, db_users, phone, state, ctx, msg)
-
-    return closing_flow.iniciar(db, db_users, phone, fecha)
-
-
 def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users: Session, media_id: str = None) -> tuple[str, dict]:
     """
     Core bot logic extracted from the simulator so both endpoints can share it.
@@ -1130,9 +1076,9 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         if session:
             db.delete(session)
             db.commit()
-        mensaje_final = (confirmation or "") + "\n\nEscribe *hola* para volver al menú."
-        if phone != "0000" and mensaje_final:
-            send_whatsapp_message(phone, mensaje_final)
+        closing = (confirmation or "") + "\n\nEscribe *hola* para volver al menú."
+        if phone != "0000" and closing:
+            send_whatsapp_message(phone, closing)
         return None, None
 
     # --- UNIFICAR ESTUDIOS COMMAND (superuser or allowed admin numbers) ---
@@ -1337,11 +1283,6 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
         db.add(session)
         db.commit()
         db.refresh(session)
-        # Se acaba de abrir la sesion: no hay conversacion a medias, asi que
-        # este es el momento de ofrecer el cierre de lo que registro hoy.
-        sesion_nueva = True
-    else:
-        sesion_nueva = False
         
     ctx = json.loads(session.context_data)
     state = session.state
@@ -1372,55 +1313,14 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
     if not is_media_unsupported:
         # Normalizar mensaje para lógica de control
         msg = msg.lower().strip()
-
-        # Cierre diario de campo.
-        #
-        # No hay palabra clave ni boton: arranca solo. Cuando se abre una
-        # sesion nueva (la primera vez o despues de los 5 min de inactividad)
-        # y esta persona ya registro cuotas hoy, se le ofrece el cierre de una.
-        #
-        # No se espera a que termine la cuota porque el cierre es por dia, no
-        # por estudio: un estudio puede durar dos o mas dias y no hay forma de
-        # saber cuando un supervisor deja de trabajar. Por eso se ofrece en
-        # cuanto vuelve a escribir, y no cuando "ya termino".
-        #
-        # 'corregir' si se queda: dentro del cierre es la unica forma de
-        # rehacer las cuentas sin esperar a que expire la sesion.
-        pendientes_hoy = (
-            sesion_nueva
-            and closing_flow.pendientes_del_supervisor(
-                db, phone, closing.colombia_hoy()
-            ) is not None
-        )
-        es_cierre = (
-            pendientes_hoy
-            or msg == "corregir"
-            or str(state or "").startswith("CIERRE_")
-        )
-        nuevo_estado = None
-        if es_cierre:
-            reply, nuevo_estado, ctx = manejar_cierre(
-                db, db_users, phone, state, ctx, msg
-            )
-            session.state = nuevo_estado or "IDLE"
-            session.context_data = json.dumps(ctx)
-            if not nuevo_estado:
-                # Se termino el cierre: la sesion no debe quedar colgada.
-                db.delete(session)
-                session = models.BotSession(
-                    phone_number=phone, state="IDLE", context_data="{}"
-                )
-                db.add(session)
-
+        
         # Detectar palabra "sobrecuota" (case-insensitive)
         is_overquota_detected = "sobrecuota" in msg
         if is_overquota_detected:
             ctx["is_overquota_allowed"] = True
             msg = re.sub(r'sobrecuota', '', msg, flags=re.IGNORECASE).strip()
-
-        if es_cierre:
-            pass  # el flujo de cierre ya dio su respuesta
-        elif state == "IDLE":
+            
+        if state == "IDLE":
             if user_type == "INACTIVE_AGENT":
                 reply = "⚠️ Por el momento no estás activo para registrar cuotas.\n\nSin embargo, puedes validar números en base:"
                 session.state = "WAITING_INACTIVE_ACTION"
@@ -1502,8 +1402,8 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     if session:
                         db.delete(session)
                         db.commit()
-                    mensaje_final = (confirmation or "") + "\n\nEscribe *hola* para volver al menú."
-                    return mensaje_final, None
+                    closing = (confirmation or "") + "\n\nEscribe *hola* para volver al menú."
+                    return closing, None
                 elif unify_idx and choice == unify_idx:
                     print(f"DEBUG: WAITING_STUDY unify help selected by {phone}")
                     if len(available) < 2:
@@ -2361,8 +2261,9 @@ def get_daily_active_phones_for_study(db, study_code):
     
     phones = [p[0] for p in subscribers if p[0]]
     
-    # Super Observadores: These numbers receive all updates for all active studies
-    for admin in ADMIN_OBSERVERS:
+    # Super Observers: These numbers receive all updates for all active studies
+    admin_observers = ["573234968972", "573158160379", "573057795561", "573136623816"]
+    for admin in admin_observers:
         if admin not in phones:
             phones.append(admin)
         
@@ -3141,10 +3042,3 @@ def send_unified_studies_report(phone: str, db, study_codes: list):
     except Exception as e:
         print(f"Error in send_unified_studies_report: {e}")
         return "⚠️ Ocurrió un error generando el reporte unificado."
-
-
-# El router del cierre se registra al final del archivo porque usa CLOSING_RECIPIENTS
-# y send_whatsapp_media, que quedan definidos mas arriba.
-from . import closing_api  # noqa: E402
-
-app.include_router(closing_api.router)
