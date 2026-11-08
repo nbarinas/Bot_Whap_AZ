@@ -21,6 +21,9 @@ S8. Todo local: sin push, sin PR, con commits en rama propia.
 - T3 — S1/S2/S4: front del modal — buscador tipeado de personas, bloque de personal por estudio con chips y typeahead, guardado único por fila. Verificación manual (no hay runner de front). Commit 3.
 - T4 — S5: la descarga CSV/Excel agrega "Encuestador" (ya existía, ahora alimentado) y "Supervisor" resuelto desde `users`. Test primero. Commit 2.
 - T5 — S7/S8: suite completa, verificación de no-regresión y commits en `feature/personal-por-estudio`.
+- T6 — S6: estado `WAITING_INTERVIEWER`; la pregunta ofrece primero al que carga y después el personal del par (agente, estudio). Siempre pregunta, nunca asigna directo. `tests/interviewer_question_test.py`. Sin commit.
+- T7 — S6: paginación con "Ver más" cuando hay más de 10 opciones (límite de WhatsApp), y `QuotaSubmission.interviewer_name` con el nombre elegido.
+- T8 — S6/S7: la cuota llena se valida ANTES de preguntar el encuestador; la ruta de texto libre también pasa por la pregunta.
 
 ## Log
 
@@ -45,3 +48,11 @@ L5 (baseline): `python test_bot_quota_completeness.py` pasa; `python test_valida
 - Pendiente de verificación manual: abrir el modal en el navegador y probar el typeahead y el guardado real.
 - La tabla `bot_agent_interviewers` se crea sola en el próximo arranque del servidor (`Base.metadata.create_all`).
 - Preexistente, no de esta feature: `python test_validation.py` falla porque `models.User` no declara `full_name`.
+
+L6 (decisión Parte B, textual): "ahora parte b entonces sin commit, lo de asignar directo no porque no sabemos si es de cual encuestador, procde y me dices al terminar como termino de ir"
+
+L7 (estilo): el usuario pidió no usar español rioplatense. Respuestas en español neutro.
+
+L8 (verificación Parte B): RED probado revirtiendo `backend/main.py` (sin el cambio el bot guardaba directo: "No preguntó: ✅ ¡Guardado con éxito!"). Suite: 6 + 1 + 5 + 4 en verde. `test_validation.py` sigue roto por causa preexistente.
+
+L9 (pendiente): la revisión nativa quedó en `reviewing` para el candidato `sha256:3b44c59f…` (solo los 4 commits anteriores); el host no tiene modelo configurado para las lentes. La Parte B está sin commitear y por lo tanto fuera de ese candidato.

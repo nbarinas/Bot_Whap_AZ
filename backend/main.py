@@ -872,7 +872,8 @@ def send_whatsapp_interactive(to_phone: str, interactive_data: dict):
 
 
 def build_interactive_options(body_text: str, options: list, force_list: bool = False,
-                              list_button_text: str = "Seleccionar", section_title: str = "Opciones") -> dict:
+                              list_button_text: str = "Seleccionar", section_title: str = "Opciones",
+                              extra_rows: list = None) -> dict:
     """
     Build an interactive WhatsApp message (buttons or list) based on option count.
     - 3 or fewer options -> buttons (one tap)
@@ -896,6 +897,9 @@ def build_interactive_options(body_text: str, options: list, force_list: bool = 
             {"id": str(i+1), "title": str(opt)[:24]}
             for i, opt in enumerate(options)
         ]
+        if extra_rows:
+            # Filas extra (ej. "Ver más"): solo se llega acá con la lista ya recortada a 9.
+            rows += [{"id": str(row_id)[:24], "title": str(title)[:24]} for row_id, title in extra_rows]
         return {
             "type": "list",
             "body": {"text": body_text},
@@ -1800,45 +1804,48 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     quota_ids = [ctx.get("free_text_quota_id")]
 
                 if quota_ids:
-                    interviewer = ctx.get("free_text_name", "no tiene")
+                    # Falta el encuestador: se pregunta antes de guardar nada.
+                    ctx["free_text_quota_ids"] = quota_ids
                     study_code = ctx.get("study_code")
-
-                    # Guardar atómicamente: si alguna cuota está llena no se crea nada
-                    err_msg, labels = validate_and_save_quotas(
-                        db, quota_ids, ctx, phone, study_code,
-                        sender_label=sender_label, interviewer_name=interviewer
+                    reply, next_state, interactive_data = build_interviewer_question(
+                        db, ctx, study_code, sender_label or phone, phone
                     )
-                    if err_msg:
-                        session.state = "IDLE"
-                        # Limpiar flags temporales pero mantener el resto del contexto (como study_code)
-                        ctx.pop("is_overquota_allowed", None)
-                        ctx.pop("free_text_quota_ids", None)
-                        session.context_data = json.dumps(ctx)
-                        db.commit()
-                        send_whatsapp_message(phone, err_msg)
-                        return err_msg, None
-
-                    # Ensure they are subscribed to this study now (latest interaction)
-                    set_exclusive_study_subscription(db, phone, study_code)
-
-                    active_phones = get_daily_active_phones_for_study(db, study_code)
-                    if phone not in active_phones:
-                        active_phones.append(phone)
-
-                    summary_str = "\n• ".join(labels)
-                    send_quota_report_to_agents(db, study_code, active_phones, f"📈 ¡Nueva encuesta guardada por *{sender_label}* en:\n• {summary_str}")
-
-                    reply = f"✅ ¡Guardado con éxito en {len(labels)} cuotas!"
+                    session.state = next_state
                 else:
                     reply = "⚠️ Error: No se encontraron las cuotas en la base de datos."
-                session.state = "IDLE"
-                ctx = {}
+                    session.state = "IDLE"
+                    ctx = {}
             elif msg in ["2", "no", "no, cancelar", "cancelar"]:
                 reply = "❌ Operación cancelada. Escribe 'Hola' para empezar de nuevo."
                 session.state = "IDLE"
                 ctx = {}
             else:
                 reply, interactive_data, ctx = handle_invalid("Selección inválida.", "1. Sí, agregar\n2. No, cancelar", ctx.get("interactive_fallback"))
+
+        elif state == "WAITING_INTERVIEWER":
+            chunk = ctx.get("interviewer_chunk", [])
+            all_options = ctx.get("interviewer_options", [])
+            if msg in ("ver mas", "ver_mas", "ver más") and len(all_options) > len(chunk):
+                ctx["interviewer_options"] = all_options[len(chunk):]
+                reply, next_state, interactive_data = _interviewer_prompt(ctx)
+                session.state = next_state
+            else:
+                choice = None
+                if msg.isdigit():
+                    idx = int(msg) - 1
+                    if 0 <= idx < len(chunk):
+                        choice = chunk[idx]
+
+                if choice is None:
+                    opts_text = "\n".join([f"{i+1}. {name}" for i, name in enumerate(chunk)])
+                    reply, interactive_data, ctx = handle_invalid(
+                        "Elige un encuestador de la lista.", opts_text, ctx.get("interactive_fallback")
+                    )
+                else:
+                    study_code = ctx.get("study_code")
+                    reply = finalize_quota_save(db, ctx, phone, study_code, sender_label, choice)
+                    session.state = "IDLE"
+                    ctx = {}
 
         # --- NUEVA RUTA: ESTADO VALIDACION NUMEROS ---
     
@@ -2718,6 +2725,128 @@ def validate_and_save_quotas(db, quota_ids, ctx, phone, study_code, sender_label
     return None, labels
 
 
+def get_allowed_interviewers(db, phone, study_code, self_label):
+    """Encuestadores válidos para este agente en este estudio.
+
+    Primero el que está cargando la encuesta (para que siempre pueda elegirse),
+    después el personal que el superuser le asignó a ese estudio.
+    """
+    options = []
+    seen = set()
+
+    def add(name):
+        name = (name or "").strip()
+        key = name_key(name)
+        if not name or not key or key in seen:
+            return
+        seen.add(key)
+        options.append(name)
+
+    add(self_label)
+
+    phones = [phone] if phone else []
+    if phone and phone.startswith("57") and len(phone) > 10:
+        phones.append(phone[2:])
+    elif phone and len(phone) == 10:
+        phones.append("57" + phone)
+
+    rows = db.query(models.BotAgentInterviewer).filter(
+        models.BotAgentInterviewer.agent_phone.in_(phones)
+    ).order_by(models.BotAgentInterviewer.id).all()
+    wanted = (study_code or "").strip().lower()
+    for row in rows:
+        if (row.study_code or "").strip().lower() == wanted:
+            add(row.interviewer_name)
+    return options
+
+
+def _interviewer_prompt(ctx):
+    """Pregunta con qué encuestador se registra, con botones o lista según cantidad."""
+    options = ctx.get("interviewer_options") or []
+    if not options:
+        return "⚠️ No hay encuestadores disponibles. Escribe 'Hola' para empezar de nuevo.", "IDLE", None
+
+    # WhatsApp acepta 3 botones o una lista de 10 filas: si hay más, se paga con "Ver más".
+    chunk = options[:9] if len(options) > 10 else options[:10]
+    has_more = len(options) > len(chunk)
+    ctx["interviewer_chunk"] = chunk
+
+    reply = "¿Con qué encuestador vas a registrar esta encuesta?"
+    if has_more:
+        reply += "\n\nEscribe 'ver más' para ver el resto de la lista."
+
+    interactive = build_interactive_options(
+        reply, chunk,
+        force_list=len(chunk) > 3,
+        list_button_text="Elegir encuestador",
+        section_title="Encuestadores",
+        extra_rows=[("ver_mas", "Ver más")] if has_more else None,
+    )
+    ctx["interactive_fallback"] = interactive
+    return reply, "WAITING_INTERVIEWER", interactive
+
+
+def _pending_quota_full_message(db, ctx):
+    """Error si alguna cuota pendiente ya está llena (se valida antes de preguntar)."""
+    if ctx.get("is_overquota_allowed"):
+        return None
+    quota_ids = ctx.get("free_text_quota_ids") or ctx.get("interactive_quota_ids") or []
+    for q_id in quota_ids:
+        quota = db.query(models.BotQuota).get(q_id)
+        if quota and quota.current_count >= quota.target_count:
+            label = f"{quota.category} | {quota.value}" if (quota.category and quota.category != "General") else quota.value
+            return (
+                f"❌ La cuota *{label}* ya está llena ({quota.current_count}/{quota.target_count}).\n\n"
+                "Cuota cerrada. Si la quieres registrar, comunícate con Armando."
+            )
+    return None
+
+
+def build_interviewer_question(db, ctx, study_code, self_label, phone):
+    """Arma la lista de encuestadores (una vez) y devuelve la pregunta."""
+    full_error = _pending_quota_full_message(db, ctx)
+    if full_error:
+        ctx.pop("free_text_quota_ids", None)
+        ctx.pop("interactive_quota_ids", None)
+        return full_error, "IDLE", None
+
+    if not ctx.get("interviewer_options"):
+        ctx["interviewer_options"] = get_allowed_interviewers(db, phone, study_code, self_label)
+    return _interviewer_prompt(ctx)
+
+
+def finalize_quota_save(db, ctx, phone, study_code, sender_label, interviewer_name):
+    """Guarda las cuotas pendientes con el encuestador elegido y avisa al grupo."""
+    quota_ids = ctx.get("free_text_quota_ids") or ctx.get("interactive_quota_ids") or []
+    if not quota_ids:
+        return "⚠️ Error: No se encontraron las cuotas en la base de datos."
+
+    err_msg, labels = validate_and_save_quotas(
+        db, quota_ids, ctx, phone, study_code,
+        sender_label=sender_label, interviewer_name=interviewer_name,
+    )
+    if err_msg:
+        ctx.pop("is_overquota_allowed", None)
+        ctx.pop("free_text_quota_ids", None)
+        ctx.pop("interactive_quota_ids", None)
+        return err_msg
+
+    set_exclusive_study_subscription(db, phone, study_code)
+
+    active_phones = get_daily_active_phones_for_study(db, study_code)
+    if phone not in active_phones:
+        active_phones.append(phone)
+
+    summary_str = "\n• ".join(labels)
+    label = sender_label if sender_label else phone
+    who = f" para *{interviewer_name}*" if interviewer_name else ""
+    send_quota_report_to_agents(
+        db, study_code, active_phones,
+        f"📈 ¡Nueva encuesta guardada por *{label}*{who} en:\n• {summary_str}",
+    )
+    return f"✅ ¡Guardado con éxito!\n• {summary_str}\n👤 Encuestador: *{interviewer_name}*"
+
+
 def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tuple[str, str, dict]:
 
     study_code = ctx["study_code"]
@@ -2819,26 +2948,8 @@ def compute_next_bot_step_interactive(db, ctx, phone="", sender_name="") -> tupl
 
             return reply_text, next_state, next_interactive
 
-        # We have all required quotas! Save them atomically
-        err_msg, labels = validate_and_save_quotas(
-            db, pending_ids, ctx, phone, study_code, sender_label=sender_name
-        )
-        if err_msg:
-            return err_msg, "IDLE", None
-
-        set_exclusive_study_subscription(db, phone, study_code)
-        
-        active_phones = get_daily_active_phones_for_study(db, study_code)
-        if phone not in active_phones:
-            active_phones.append(phone)
-            
-        label = sender_name if sender_name else phone
-        summary_str = "\n• ".join(labels)
-        send_quota_report_to_agents(db, study_code, active_phones, f"📈 ¡Nueva encuesta guardada por *{label}* en:\n• {summary_str}")
-        
-        ctx["interactive_quota_ids"] = []
-        
-        return f"✅ ¡Guardado con éxito!\n• {summary_str}", "IDLE", None
+        # Cuotas completas: falta el encuestador. No se guarda nada todavía.
+        return build_interviewer_question(db, ctx, study_code, sender_name or phone, phone)
         
     # Not a leaf, gather next layer options
     next_options = []
