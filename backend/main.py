@@ -455,13 +455,51 @@ def delete_study(study_code: str, db: Session = Depends(database.get_db), curren
     db.commit()
     return {"msg": "Study deleted"}
 
+def load_user_names_by_phone(db_users):
+    """Mapa phone_number -> nombre visible, tolerando que falte la columna full_name."""
+    try:
+        rows = db_users.execute(text(
+            "SELECT phone_number, full_name, username FROM users "
+            "WHERE phone_number IS NOT NULL AND phone_number != ''"
+        )).fetchall()
+        return {row.phone_number: (row.full_name or row.username) for row in rows}
+    except Exception:
+        rows = db_users.execute(text(
+            "SELECT phone_number, username FROM users "
+            "WHERE phone_number IS NOT NULL AND phone_number != ''"
+        )).fetchall()
+        return {row.phone_number: row.username for row in rows}
+
+
+def resolve_supervisor_name(name_map, phone):
+    """Nombre del supervisor que cargo la encuesta.
+
+    El webhook guarda el telefono en formato Meta (con 57) mientras que users
+    puede tenerlo en 10 digitos, asi que probamos ambas formas. Si no esta en
+    users, devolvemos el telefono crudo para no perder el dato.
+    """
+    if not phone:
+        return ""
+    phone = str(phone).strip()
+    candidates = [phone]
+    if phone.startswith("57") and len(phone) > 10:
+        candidates.append(phone[2:])
+    elif len(phone) == 10:
+        candidates.append("57" + phone)
+    for candidate in candidates:
+        if candidate in name_map:
+            return name_map[candidate]
+    return phone
+
+
 @app.get("/api/export-data/{study_code}")
-def export_study_data(study_code: str, db: Session = Depends(database.get_db)):
+def export_study_data(study_code: str, db: Session = Depends(database.get_db), db_users: Session = Depends(database.get_users_db)):
     
     try:
         quotas = db.query(models.BotQuota).filter(models.BotQuota.study_code == study_code).all()
         q_ids = [q.id for q in quotas]
         quota_info = {q.id: q for q in quotas}
+        supervisor_names = load_user_names_by_phone(db_users)
         
         submissions = db.query(models.QuotaSubmission).filter(
             models.QuotaSubmission.bot_quota_id.in_(q_ids),
@@ -470,7 +508,7 @@ def export_study_data(study_code: str, db: Session = Depends(database.get_db)):
         
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["ID", "Fecha", "Estudio", "Tipo de Punto", "Categoría", "Valor", "Número Celular", "Encuestador"])
+        writer.writerow(["ID", "Fecha", "Estudio", "Tipo de Punto", "Categoría", "Valor", "Número Celular", "Encuestador", "Supervisor"])
         
         regular_subs = []
         censos_subs = []
@@ -493,7 +531,8 @@ def export_study_data(study_code: str, db: Session = Depends(database.get_db)):
                 q.category if q else "",
                 q.value if q else "",
                 s.phone_number,
-                s.interviewer_name or ""
+                s.interviewer_name or "",
+                resolve_supervisor_name(supervisor_names, s.phone_number),
             ])
             
         # 2. Escribir censos agrupados por lote (mismo minuto, mismo encuestador)
@@ -523,7 +562,8 @@ def export_study_data(study_code: str, db: Session = Depends(database.get_db)):
                 q.category if q else "",
                 f"{data['count']} {q_val}", # Ej: "80 Censos MB"
                 s.phone_number,
-                s.interviewer_name or ""
+                s.interviewer_name or "",
+                resolve_supervisor_name(supervisor_names, s.phone_number),
             ])
         
         output.seek(0)
