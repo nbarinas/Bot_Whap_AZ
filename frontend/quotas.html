@@ -463,6 +463,68 @@
         .is-total-cell .val-disp {
             color: var(--primary-color);
         }
+
+        /* Encuestadores: personal asignado por estudio */
+        .study-item {
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 6px;
+            margin-bottom: 6px;
+            background: #fff;
+        }
+
+        .roster-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: #e0f2fe;
+            color: #075985;
+            border: 1px solid #7dd3fc;
+            border-radius: 999px;
+            padding: 2px 8px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            margin: 0 4px 4px 0;
+        }
+
+        .roster-chip button {
+            background: none;
+            border: none;
+            color: #0369a1;
+            cursor: pointer;
+            font-weight: 900;
+            font-size: 0.85rem;
+            line-height: 1;
+            padding: 0;
+        }
+
+        .roster-input {
+            width: 100%;
+            padding: 5px 8px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            font-size: 0.78rem;
+            box-sizing: border-box;
+        }
+
+        .roster-options {
+            background: #fff;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            max-height: 130px;
+            overflow-y: auto;
+            margin-top: 4px;
+        }
+
+        .roster-option {
+            padding: 4px 8px;
+            font-size: 0.78rem;
+            cursor: pointer;
+        }
+
+        .roster-option:hover {
+            background: #f1f5f9;
+        }
     </style>
 </head>
 
@@ -614,10 +676,16 @@
 
     <!-- Agents Modal -->
     <div id="agentsModal" class="modal">
-        <div class="modal-content" style="max-width: 600px;">
+        <div class="modal-content" style="max-width: 720px;">
             <h2 style="margin:0 0 1rem 0; font-size:1.5rem; font-weight:800; text-align:center;"><i class="fas fa-users"></i> Gestión de Encuestadores</h2>
-            <p style="text-align:center; color:var(--text-muted); margin-bottom:1rem; font-size:0.9rem;">Selecciona quiénes tienen permiso de registrar cuotas en el bot de WhatsApp.</p>
-            <div class="modal-body" id="agentsListContainer" style="background:#f8fafc; border-radius:10px; border:1px solid var(--border-color); padding:1rem; max-height:400px; overflow-y:auto;">
+            <p style="text-align:center; color:var(--text-muted); margin-bottom:0.8rem; font-size:0.9rem;">Activa quiénes pueden registrar cuotas en el bot de WhatsApp, qué estudios ven y qué personal (encuestadores) pueden reportar en cada estudio.</p>
+            <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px;">
+                <input type="text" id="agentsSearch" placeholder="Buscar por nombre, teléfono o rol..."
+                    autocomplete="off" oninput="onAgentsSearch(this.value)"
+                    style="flex:1; padding:0.7rem; border:2px solid var(--border-color); border-radius:10px; font-weight:600; box-sizing:border-box;">
+                <small id="agentsCount" style="color:var(--text-muted); font-weight:700; white-space:nowrap;"></small>
+            </div>
+            <div class="modal-body" id="agentsListContainer" style="background:#f8fafc; border-radius:10px; border:1px solid var(--border-color); padding:1rem; max-height:460px; overflow-y:auto;">
                 <p style="text-align:center;">Cargando encuestadores...</p>
             </div>
             <div class="modal-footer">
@@ -694,7 +762,7 @@
         </div>
     </div>
 
-    <script src="/static/quotas.js?v=27"></script>
+    <script src="/static/quotas.js?v=28"></script>
 </body>
 
 </html>

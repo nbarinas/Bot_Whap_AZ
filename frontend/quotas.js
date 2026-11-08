@@ -834,11 +834,50 @@ async function toggleStudyStatus(studyId, studyName) {
 
 function openAgentsModal() {
     document.getElementById('agentsModal').style.display = 'flex';
+    agentsSearchTerm = '';
+    const search = document.getElementById('agentsSearch');
+    if (search) search.value = '';
     loadAgents();
 }
 
 function closeAgentsModal() {
     document.getElementById('agentsModal').style.display = 'none';
+}
+
+// ============================================================
+// ENCUESTADORES: activo + estudios permitidos + personal por estudio
+// ============================================================
+
+let agentsCache = [];
+let agentsActiveStudies = [];
+let agentsSearchTerm = '';
+
+function escapeHtml(value) {
+    return String(value === null || value === undefined ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function normalizeText(value) {
+    return String(value === null || value === undefined ? '' : value)
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .trim();
+}
+
+function shortPhone(phone) {
+    const digits = String(phone || '').replace(/\D/g, '');
+    return digits.length >= 4 ? digits.slice(-4) : digits;
+}
+
+function rosterChipHtml(name) {
+    return '<span class="roster-chip" data-role="chip" data-name="' + escapeHtml(name) + '">'
+        + escapeHtml(name)
+        + ' <button type="button" title="Quitar" onclick="removeRosterChip(this)">&times;</button></span>';
 }
 
 async function loadAgents() {
@@ -849,58 +888,220 @@ async function loadAgents() {
             fetchWithAuth('/api/agents'),
             fetchWithAuth('/api/studies/active')
         ]);
-        
-        if (!resAgents.ok) { container.innerHTML = '<p>Error cargando encuestadores.</p>'; return; }
-        
-        const agents = await resAgents.json();
-        const studiesData = resStudies.ok ? await resStudies.json() : { active_studies: [] };
-        const activeStudies = studiesData.active_studies || [];
-        
-        if (agents.length === 0) {
-            container.innerHTML = '<p style="text-align:center;">No hay usuarios en la base de datos.</p>';
-            return;
-        }
-        
-        let html = '<table style="width:100%; border-collapse:collapse; text-align:left;">';
-        html += '<tr style="border-bottom:2px solid var(--border-color);"><th>Teléfono</th><th>Nombre / Rol</th><th>Estudios Permitidos</th><th style="text-align:center;">Activo</th></tr>';
-        
-        agents.forEach(a => {
-            const isChecked = a.is_active ? 'checked' : '';
-            const assignedArray = a.assigned_studies ? a.assigned_studies.split(',').map(s => s.trim().toLowerCase()) : [];
-            
-            let checkboxesHtml = '<div style="max-height:80px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:4px; padding:4px; font-size:0.8rem; background:#f8fafc; margin-bottom:4px;">';
-            if (activeStudies.length === 0) {
-                checkboxesHtml += '<div style="color:#94a3b8; font-style:italic;">No hay estudios activos</div>';
-            } else {
-                activeStudies.forEach(study => {
-                    const checked = assignedArray.includes(study.toLowerCase()) ? 'checked' : '';
-                    checkboxesHtml += `<label style="display:block; cursor:pointer; margin-bottom:2px;"><input type="checkbox" class="study-cb-${a.phone_number}" value="${study}" ${checked}> ${study}</label>`;
-                });
-            }
-            checkboxesHtml += '</div>';
 
-            html += `
-                <tr style="border-bottom:1px solid var(--border-color);">
-                    <td style="padding:10px 0; font-weight:bold;">${a.phone_number}</td>
-                    <td style="padding:10px 0; color:var(--text-main); font-weight:600;">${a.full_name ? a.full_name : a.username} <br><small style="color:var(--text-muted); font-weight:normal;">Usr: ${a.username} (${a.role})</small></td>
-                    <td style="padding:10px 0; max-width:200px;">
-                        ${checkboxesHtml}
-                        <button onclick="saveAgentStudiesCB('${a.phone_number}')" style="padding:4px 8px; font-size:0.75rem; border-radius:4px; background:var(--primary-color); color:white; border:none; cursor:pointer; width:100%; margin-top:2px;">Guardar Estudios</button>
-                    </td>
-                    <td style="padding:10px 0; text-align:center;">
-                        <label style="cursor:pointer;">
-                            <input type="checkbox" onchange="toggleAgentStatus('${a.phone_number}', this.checked)" ${isChecked} style="transform: scale(1.5);">
-                        </label>
-                    </td>
-                </tr>
-            `;
-        });
-        html += '</table>';
-        container.innerHTML = html;
-        
+        if (!resAgents.ok) { container.innerHTML = '<p>Error cargando encuestadores.</p>'; return; }
+
+        agentsCache = await resAgents.json();
+        const studiesData = resStudies.ok ? await resStudies.json() : { active_studies: [] };
+        agentsActiveStudies = studiesData.active_studies || [];
+        renderAgents();
     } catch (e) {
         console.error(e);
         container.innerHTML = '<p>Error de conexión.</p>';
+    }
+}
+
+function renderAgents() {
+    const container = document.getElementById('agentsListContainer');
+
+    if (agentsCache.length === 0) {
+        container.innerHTML = '<p style="text-align:center;">No hay usuarios en la base de datos.</p>';
+        applyAgentsFilter();
+        return;
+    }
+
+    let html = '<table style="width:100%; border-collapse:collapse; text-align:left;">';
+    html += '<tr style="border-bottom:2px solid var(--border-color);"><th>Teléfono</th><th>Nombre / Rol</th><th>Estudios y personal</th><th style="text-align:center;">Activo</th></tr>';
+
+    agentsCache.forEach(a => {
+        const rosters = a.interviewers_by_study || {};
+        const assignedKeys = new Set(
+            (a.assigned_studies || '').split(',').map(s => normalizeText(s)).filter(Boolean)
+        );
+        const isChecked = a.is_active ? 'checked' : '';
+        const phoneAttr = escapeHtml(a.phone_number);
+
+        let studiesHtml = '';
+        if (agentsActiveStudies.length === 0) {
+            studiesHtml += '<div style="color:#94a3b8; font-style:italic; font-size:0.8rem;">No hay estudios activos</div>';
+        } else {
+            agentsActiveStudies.forEach(study => {
+                const checked = assignedKeys.has(normalizeText(study)) ? 'checked' : '';
+                const visible = checked ? 'block' : 'none';
+                const names = rosters[study] || [];
+                const chips = names.map(name => rosterChipHtml(name)).join('');
+                const studyAttr = escapeHtml(study);
+
+                studiesHtml += ''
+                    + '<div class="study-item">'
+                    + '<label style="display:block; cursor:pointer; font-size:0.82rem; font-weight:700; color:var(--text-main);">'
+                    + '<input type="checkbox" data-role="study-cb" data-phone="' + phoneAttr + '" data-study="' + studyAttr + '" ' + checked + ' onchange="onStudyToggle(this)"> ' + escapeHtml(study)
+                    + '</label>'
+                    + '<div data-role="study-roster" data-phone="' + phoneAttr + '" data-study="' + studyAttr + '" style="display:' + visible + '; margin-top:6px;">'
+                    + '<div data-role="chips">' + chips + '</div>'
+                    + '<input type="text" class="roster-input" data-role="roster-input" autocomplete="off"'
+                    + ' placeholder="Buscar encuestador por nombre, rol o teléfono..."'
+                    + ' oninput="onRosterInput(this)" onfocus="onRosterInput(this)"'
+                    + ' onblur="closeRosterLater(this)" onkeydown="onRosterKey(event, this)">'
+                    + '<div class="roster-options" data-role="roster-options" style="display:none;"></div>'
+                    + '</div>'
+                    + '</div>';
+            });
+        }
+
+        const searchBlob = normalizeText([a.full_name, a.username, a.phone_number, a.role].filter(Boolean).join(' '));
+
+        html += ''
+            + '<tr data-role="agent-row" data-search="' + escapeHtml(searchBlob) + '" style="border-bottom:1px solid var(--border-color); vertical-align:top;">'
+            + '<td style="padding:10px 0; font-weight:bold;">' + phoneAttr + '</td>'
+            + '<td style="padding:10px 0; color:var(--text-main); font-weight:600;">' + escapeHtml(a.full_name ? a.full_name : a.username)
+            + '<br><small style="color:var(--text-muted); font-weight:normal;">Usr: ' + escapeHtml(a.username) + ' (' + escapeHtml(a.role) + ')</small></td>'
+            + '<td style="padding:10px 0; max-width:280px;">'
+            + studiesHtml
+            + '<button onclick="saveAgentSettings(\'' + phoneAttr + '\')" style="padding:6px 8px; font-size:0.78rem; border-radius:6px; background:var(--primary-color); color:white; border:none; cursor:pointer; width:100%; margin-top:4px;">Guardar</button>'
+            + '</td>'
+            + '<td style="padding:10px 0; text-align:center;">'
+            + '<label style="cursor:pointer;">'
+            + '<input type="checkbox" onchange="toggleAgentStatus(\'' + phoneAttr + '\', this.checked)" ' + isChecked + ' style="transform: scale(1.5);">'
+            + '</label>'
+            + '</td>'
+            + '</tr>';
+    });
+
+    html += '</table>';
+    container.innerHTML = html;
+
+    const search = document.getElementById('agentsSearch');
+    if (search) search.value = agentsSearchTerm;
+    applyAgentsFilter();
+}
+
+function onAgentsSearch(value) {
+    agentsSearchTerm = value || '';
+    applyAgentsFilter();
+}
+
+function applyAgentsFilter() {
+    const term = normalizeText(agentsSearchTerm);
+    const rows = Array.from(document.querySelectorAll('#agentsListContainer tr[data-role="agent-row"]'));
+    let visible = 0;
+    rows.forEach(row => {
+        const match = !term || (row.dataset.search || '').includes(term);
+        row.style.display = match ? '' : 'none';
+        if (match) visible += 1;
+    });
+    const counter = document.getElementById('agentsCount');
+    if (counter) counter.textContent = rows.length ? (visible + ' de ' + rows.length) : '';
+}
+
+function findRosterBlock(phone, study) {
+    const blocks = Array.from(document.querySelectorAll('[data-role="study-roster"]'));
+    return blocks.find(b => b.dataset.phone === phone && b.dataset.study === study) || null;
+}
+
+function onStudyToggle(checkbox) {
+    const block = findRosterBlock(checkbox.dataset.phone, checkbox.dataset.study);
+    if (!block) return;
+    block.style.display = checkbox.checked ? 'block' : 'none';
+    if (checkbox.checked) {
+        const input = block.querySelector('[data-role="roster-input"]');
+        if (input) input.focus();
+    }
+}
+
+function onRosterInput(input) {
+    const block = input.closest('[data-role="study-roster"]');
+    if (!block) return;
+    const options = block.querySelector('[data-role="roster-options"]');
+    if (!options) return;
+
+    const chipped = new Set(
+        Array.from(block.querySelectorAll('[data-role="chip"]')).map(c => normalizeText(c.dataset.name))
+    );
+    const term = normalizeText(input.value);
+
+    const seen = new Set();
+    const candidates = [];
+    agentsCache.forEach(a => {
+        const name = a.full_name || a.username;
+        if (!name) return;
+        const key = normalizeText(name);
+        if (chipped.has(key) || seen.has(key)) return;
+        const haystack = normalizeText([name, a.username, a.phone_number, a.role].filter(Boolean).join(' '));
+        if (term && !haystack.includes(term)) return;
+        seen.add(key);
+        candidates.push({ name: name, role: a.role, phone: a.phone_number });
+    });
+
+    if (candidates.length === 0) {
+        options.innerHTML = '<div style="padding:6px 8px; font-size:0.78rem; color:#94a3b8; font-style:italic;">Sin coincidencias</div>';
+    } else {
+        options.innerHTML = candidates.slice(0, 30).map(c =>
+            '<div class="roster-option" data-role="roster-option" data-name="' + escapeHtml(c.name) + '" onmousedown="pickRosterName(event, this)">'
+            + escapeHtml(c.name)
+            + '<small style="color:var(--text-muted); font-weight:600;"> · ' + escapeHtml(c.role || '') + ' · ' + escapeHtml(shortPhone(c.phone)) + '</small></div>'
+        ).join('');
+    }
+    options.style.display = 'block';
+}
+
+function closeRosterLater(input) {
+    setTimeout(() => {
+        const block = input.closest('[data-role="study-roster"]');
+        if (!block) return;
+        const options = block.querySelector('[data-role="roster-options"]');
+        if (options) options.style.display = 'none';
+    }, 150);
+}
+
+function pickRosterName(event, option) {
+    event.preventDefault();
+    const block = option.closest('[data-role="study-roster"]');
+    if (!block) return;
+    addRosterChip(block, option.dataset.name);
+}
+
+function addRosterChip(block, name) {
+    const chips = block.querySelector('[data-role="chips"]');
+    if (!chips) return;
+    const key = normalizeText(name);
+    const already = Array.from(chips.querySelectorAll('[data-role="chip"]'))
+        .some(c => normalizeText(c.dataset.name) === key);
+    if (already) return;
+    chips.insertAdjacentHTML('beforeend', rosterChipHtml(name));
+    const input = block.querySelector('[data-role="roster-input"]');
+    if (input) {
+        input.value = '';
+        input.focus();
+    }
+    const options = block.querySelector('[data-role="roster-options"]');
+    if (options) options.style.display = 'none';
+}
+
+function onRosterKey(event, input) {
+    const block = input.closest('[data-role="study-roster"]');
+    if (!block) return;
+    const options = block.querySelector('[data-role="roster-options"]');
+    if (event.key === 'Escape') {
+        if (options) options.style.display = 'none';
+        return;
+    }
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        // Solo se agrega personal que existe en la lista de usuarios del sistema.
+        const first = block.querySelector('[data-role="roster-option"]');
+        if (first) addRosterChip(block, first.dataset.name);
+    }
+}
+
+function removeRosterChip(button) {
+    const chip = button.closest('[data-role="chip"]');
+    if (!chip) return;
+    const block = chip.closest('[data-role="study-roster"]');
+    chip.remove();
+    if (block) {
+        const input = block.querySelector('[data-role="roster-input"]');
+        if (input) input.focus();
     }
 }
 
@@ -918,22 +1119,51 @@ async function toggleAgentStatus(phone, isActive) {
     }
 }
 
-async function saveAgentStudiesCB(phone) {
-    const checkboxes = document.querySelectorAll('.study-cb-' + phone + ':checked');
-    const selected = Array.from(checkboxes).map(cb => cb.value).join(',');
-    
+async function saveAgentSettings(phone) {
+    const checkboxes = Array.from(document.querySelectorAll('[data-role="study-cb"]'))
+        .filter(cb => cb.dataset.phone === phone);
+    const selected = checkboxes.filter(cb => cb.checked).map(cb => cb.dataset.study);
+
+    // Los estudios cerrados no se dibujan en el modal: se preservan tal cual estaban
+    // para que guardar no les borre el personal asignado.
+    const activeKeys = new Set(agentsActiveStudies.map(s => normalizeText(s)));
+    const cached = agentsCache.find(a => a.phone_number === phone);
+    const preserved = (cached && cached.assigned_studies ? cached.assigned_studies.split(',') : [])
+        .map(s => s.trim())
+        .filter(s => s && !activeKeys.has(normalizeText(s)));
+    const studiesToSave = selected.concat(preserved);
+
     try {
         const res = await fetchWithAuth('/api/agents/assign', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ phone_number: phone, assigned_studies: selected })
+            body: JSON.stringify({ phone_number: phone, assigned_studies: studiesToSave.join(',') })
         });
-        if (res.ok) {
-            alert('Estudios guardados correctamente.');
-        } else {
+        if (!res.ok) {
             const errData = await res.json().catch(() => ({}));
             alert(errData.detail || 'Error al asignar estudios.');
+            return;
         }
+
+        for (const study of selected) {
+            const block = findRosterBlock(phone, study);
+            const names = block
+                ? Array.from(block.querySelectorAll('[data-role="chip"]')).map(c => c.dataset.name)
+                : [];
+            const resRoster = await fetchWithAuth('/api/agents/interviewers', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone_number: phone, study_code: study, interviewers: names })
+            });
+            if (!resRoster.ok) {
+                const errData = await resRoster.json().catch(() => ({}));
+                alert(errData.detail || ('Error al guardar el personal de ' + study + '.'));
+                return;
+            }
+        }
+
+        await loadAgents();
+        alert('Guardado: estudios y personal actualizados.');
     } catch (e) {
         console.error(e);
         alert('Error de conexión.');
