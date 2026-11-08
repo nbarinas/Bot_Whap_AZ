@@ -7,7 +7,7 @@ from typing import Optional
 import os
 from fastapi.security import OAuth2PasswordRequestForm
 
-from . import models, database, auth, render_utils, upload_media
+from . import models, database, auth, render_utils, upload_media, day_closing
 import re
 import io
 import csv
@@ -1114,6 +1114,14 @@ def build_agent_main_menu(db, phone, user_record, agent_name, is_active, active_
             opts += f"\n{unify_idx}. Unificar estudios"
             ctx["unify_option_idx"] = unify_idx
 
+    # Cierre del dia: solo aparece si ya registro encuestas hoy (hora Colombia).
+    ctx["closing_option_idx"] = None
+    if day_closing.has_activity_today(db, phone):
+        last_idx = ctx.get("unify_option_idx") or ctx.get("crm_summary_option_idx") or validate_idx
+        closing_idx = last_idx + 1
+        opts += f"\n{closing_idx}. Cerrar día"
+        ctx["closing_option_idx"] = closing_idx
+
     greeting = f"¡Hola {agent_name}!" if agent_name else "¡Hola!"
     reply = timeout_message + f"{greeting} ¿Qué deseas hacer?"
 
@@ -1122,12 +1130,34 @@ def build_agent_main_menu(db, phone, user_record, agent_name, is_active, active_
         menu_options.append("Resumen CRM")
         if len(study_list) >= 2:
             menu_options.append("Unificar estudios")
+    if ctx.get("closing_option_idx"):
+        menu_options.append("Cerrar día")
     interactive_data = build_interactive_options(
         reply, menu_options,
         list_button_text="Ver Opciones",
         section_title="Estudios Disponibles"
     )
     return reply, interactive_data, ctx, menu_options
+
+
+def superuser_phones(db_users):
+    """Telefonos de los superusuarios que reciben los resumenes del dia."""
+    try:
+        rows = db_users.execute(text(
+            "SELECT phone_number FROM users WHERE role = 'superuser' "
+            "AND phone_number IS NOT NULL AND phone_number != ''"
+        )).fetchall()
+        return [row.phone_number for row in rows]
+    except Exception:
+        return []
+
+
+def meta_target(phone_number):
+    """Meta necesita el pais: los telefonos de 10 digitos van con 57."""
+    digits = re.sub(r"\D", "", str(phone_number or ""))
+    if len(digits) == 10:
+        return "57" + digits
+    return digits or str(phone_number or "")
 
 
 def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users: Session, media_id: str = None) -> tuple[str, dict]:
@@ -1554,6 +1584,11 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                         reply, ["Añadir 1 encuesta", "Borrar mi última", "Ver cuotas actuales"]
                     )
                     ctx["interactive_fallback"] = interactive_data
+                elif ctx.get("closing_option_idx") and choice == ctx.get("closing_option_idx"):
+                    reply, next_state, interactive_data, ctx = day_closing.start(
+                        db, ctx, phone, sender_label
+                    )
+                    session.state = next_state
                 elif validate_idx and choice == validate_idx:
                     reply = "Por favor, digite el número de celular a validar:"
                     session.state = "WAITING_VALIDATION_PHONE"
@@ -1846,6 +1881,17 @@ def process_bot_message(phone_raw: str, message_raw: str, db: Session, db_users:
                     reply = finalize_quota_save(db, ctx, phone, study_code, sender_label, choice)
                     session.state = "IDLE"
                     ctx = {}
+
+        elif state in day_closing.STATES:
+            reply, next_state, interactive_data, ctx = day_closing.handle(
+                db, state, msg, ctx, phone, sender_label
+            )
+            session.state = next_state
+            summary = ctx.pop("closing_summary", None) if isinstance(ctx, dict) else None
+            if summary:
+                for target in superuser_phones(db_users):
+                    if target and target != phone:
+                        send_whatsapp_message(meta_target(target), summary)
 
         # --- NUEVA RUTA: ESTADO VALIDACION NUMEROS ---
     

@@ -76,6 +76,43 @@ class BotAgentInterviewer(Base):
         ),
     )
 
+class BotDailyClosing(Base):
+    """Cierre del dia: uno por supervisor, fecha y estudio."""
+    __tablename__ = "bot_daily_closings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    close_date = Column(String(10), index=True, nullable=False)   # YYYY-MM-DD hora Colombia
+    study_code = Column(String(50), index=True, nullable=False)
+    supervisor_phone = Column(String(50), index=True, nullable=False)
+    supervisor_name = Column(String(120), nullable=True)
+    filled_by = Column(String(50), nullable=True)
+    note = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "close_date", "study_code", "supervisor_phone",
+            name="uq_bot_daily_closing",
+        ),
+    )
+
+
+class BotDailyClosingLine(Base):
+    """Lo declarado por persona en un cierre: censos por tipo, transporte e incentivo."""
+    __tablename__ = "bot_daily_closing_lines"
+
+    id = Column(Integer, primary_key=True, index=True)
+    closing_id = Column(Integer, ForeignKey("bot_daily_closings.id"), index=True, nullable=False)
+    interviewer_name = Column(String(120), nullable=False)
+    surveys_system = Column(Integer, default=0)    # foto del sistema al cerrar
+    census_generic = Column(Integer, default=0)
+    census_23 = Column(Integer, default=0)
+    census_4 = Column(Integer, default=0)
+    transport_amount = Column(Integer, default=0)
+    incentive_amount = Column(Integer, default=0)
+
+
 class BotReferral(Base):
     __tablename__ = "bot_referrals"
     
