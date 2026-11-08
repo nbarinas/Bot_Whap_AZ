@@ -33,3 +33,15 @@ L3 (decisión de origen de la lista): el usuario eligió "De la lista de usuario
 L4 (autorización de implementación, textual): "ok me gusta el plan, quiero que tambien esto se vea cuando el usuario decida tocar el boton de descargas en excel, procede en local y commit"
 
 L5 (baseline): `python test_bot_quota_completeness.py` pasa; `python test_validation.py` ya fallaba antes de esta feature (tabla `users` en memoria sin `full_name`, porque `models.User` no declara esa columna). No se toca.
+
+## Evidence
+
+- Commits en `feature/personal-por-estudio`: `feb9102` (T1/T2), `e8a32dc` (T4), `c31505f` (T3).
+- `python tests/agent_interviewers_api_test.py` → 6 OK.
+- `python tests/export_interviewer_test.py` → 1 OK.
+- `python test_bot_quota_completeness.py` → 4 OK (sin cambios respecto del baseline).
+- `node --check frontend/quotas.js` → OK.
+- Smoke ASGI (sin tocar la DB real): `GET /` 200 con `#agentsSearch`, `GET /static/quotas.js` 200 con `saveAgentSettings`.
+- Pendiente de verificación manual: abrir el modal en el navegador y probar el typeahead y el guardado real.
+- La tabla `bot_agent_interviewers` se crea sola en el próximo arranque del servidor (`Base.metadata.create_all`).
+- Preexistente, no de esta feature: `python test_validation.py` falla porque `models.User` no declara `full_name`.
