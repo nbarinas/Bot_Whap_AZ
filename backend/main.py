@@ -11,6 +11,7 @@ from . import models, database, auth, render_utils, upload_media
 import re
 import io
 import csv
+import unicodedata
 from fastapi import Response
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -580,20 +581,44 @@ def get_agents(db: Session = Depends(database.get_db), db_users: Session = Depen
         
     active_records = db.query(models.BotActiveAgent).all()
     active_map = {record.phone_number: record.assigned_studies for record in active_records}
-    
+
+    # Personal (encuestadores) asignado por par (agente, estudio).
+    roster_map = {}
+    for row in db.query(models.BotAgentInterviewer).order_by(models.BotAgentInterviewer.id).all():
+        per_agent = roster_map.setdefault(row.agent_phone, {})
+        per_agent.setdefault((row.study_code or "").strip().lower(), []).append(row.interviewer_name)
+
     agents = []
     for u in all_users:
         if u.phone_number:
             is_active = u.phone_number in active_map
+            allowed_studies = split_study_codes(active_map[u.phone_number]) if is_active else []
+            phone_rosters = roster_map.get(u.phone_number, {})
             agents.append({
                 "username": u.username,
                 "full_name": u.full_name if u.full_name else u.username,
                 "phone_number": u.phone_number,
                 "role": u.role,
                 "is_active": is_active,
-                "assigned_studies": active_map[u.phone_number] if is_active else None
+                "assigned_studies": active_map[u.phone_number] if is_active else None,
+                "interviewers_by_study": {
+                    code: phone_rosters.get(code.lower(), []) for code in allowed_studies
+                },
             })
     return agents
+
+def split_study_codes(assigned_studies):
+    """Convierte '1542, 1543' en ['1542', '1543'] descartando vacios."""
+    return [(code or "").strip() for code in (assigned_studies or "").split(",") if (code or "").strip()]
+
+def name_key(value):
+    """Clave de comparacion de nombres: sin acentos, sin espacios extra y en minusculas."""
+    normalized = unicodedata.normalize("NFKD", value or "")
+    return normalized.encode("ascii", "ignore").decode().strip().lower()
+
+def require_superuser(current_user):
+    if getattr(current_user, "role", "") != "superuser":
+        raise HTTPException(status_code=403, detail="Debes ser Superuser para cambiar el personal.")
 
 class AgentToggleRequest(BaseModel):
     phone_number: str
@@ -620,9 +645,59 @@ def assign_agent_studies(req: AgentAssignRequest, db: Session = Depends(database
     record = db.query(models.BotActiveAgent).filter(models.BotActiveAgent.phone_number == req.phone_number).first()
     if record:
         record.assigned_studies = req.assigned_studies
+        # Coherencia: el personal de un estudio que se destilda ya no puede usarse.
+        allowed_keys = {name_key(code) for code in split_study_codes(req.assigned_studies)}
+        for row in db.query(models.BotAgentInterviewer).filter(
+            models.BotAgentInterviewer.agent_phone == req.phone_number
+        ).all():
+            if name_key(row.study_code) not in allowed_keys:
+                db.delete(row)
         db.commit()
         return {"msg": "Agent assignments updated"}
     raise HTTPException(status_code=400, detail="Debes marcar la casilla 'Activo' del encuestador primero.")
+
+class AgentInterviewersRequest(BaseModel):
+    phone_number: str
+    study_code: str
+    interviewers: list = []
+
+@app.post("/api/agents/interviewers")
+def set_agent_interviewers(req: AgentInterviewersRequest, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):
+    """Reemplaza la lista de personal de un par (agente, estudio permitido)."""
+    require_superuser(current_user)
+
+    record = db.query(models.BotActiveAgent).filter(models.BotActiveAgent.phone_number == req.phone_number).first()
+    if not record:
+        raise HTTPException(status_code=400, detail="Debes marcar la casilla 'Activo' del encuestador primero.")
+
+    allowed = split_study_codes(record.assigned_studies)
+    requested_key = name_key(req.study_code)
+    study_code = next((code for code in allowed if name_key(code) == requested_key), None)
+    if not study_code:
+        raise HTTPException(status_code=400, detail="El estudio no esta permitido para este encuestador.")
+
+    cleaned = []
+    seen = set()
+    for raw_name in (req.interviewers or []):
+        name = (raw_name or "").strip()
+        key = name_key(name)
+        if not name or not key or key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(name)
+
+    db.query(models.BotAgentInterviewer).filter(
+        models.BotAgentInterviewer.agent_phone == req.phone_number,
+        models.BotAgentInterviewer.study_code == study_code,
+    ).delete(synchronize_session=False)
+    for name in cleaned:
+        db.add(models.BotAgentInterviewer(
+            agent_phone=req.phone_number,
+            study_code=study_code,
+            interviewer_name=name,
+        ))
+    db.commit()
+    return {"msg": "Agent interviewers updated", "study_code": study_code, "interviewers": cleaned}
 
 @app.get("/api/studies/active")
 def get_active_studies(db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_user)):

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, Boolean, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .database import Base, UsersBase
@@ -53,6 +53,28 @@ class BotActiveAgent(Base):
     __tablename__ = "bot_active_agents"
     phone_number = Column(String(50), primary_key=True)
     assigned_studies = Column(String(500), nullable=True)
+
+
+class BotAgentInterviewer(Base):
+    """Encuestadores (personal) que un agente puede reportar en un estudio permitido.
+
+    El vinculo es por par (telefono del agente, estudio): cada estudio permitido
+    tiene su propia lista, independiente del resto.
+    """
+    __tablename__ = "bot_agent_interviewers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    agent_phone = Column(String(50), index=True, nullable=False)
+    study_code = Column(String(50), index=True, nullable=False)
+    interviewer_name = Column(String(120), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "agent_phone", "study_code", "interviewer_name",
+            name="uq_bot_agent_interviewer",
+        ),
+    )
 
 class BotReferral(Base):
     __tablename__ = "bot_referrals"
